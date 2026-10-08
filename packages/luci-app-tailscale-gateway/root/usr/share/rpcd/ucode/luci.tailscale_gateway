@@ -1,0 +1,44 @@
+import { read_json, RUN, STATE } from '/usr/share/tailscale-gateway/common.uc';
+import { configuration } from '/usr/share/tailscale-gateway/state.uc';
+import { make_plan, release_plan } from '/usr/share/tailscale-gateway/planner.uc';
+import { enqueue, logs } from '/usr/share/tailscale-gateway/operations.uc';
+import { access } from 'fs';
+
+function protect(fn) {
+	return function(req) {
+		try { return { ok: true, data: fn(req) }; }
+		catch (e) { return { ok: false, error: e.message || '' + e }; }
+	};
+}
+function schedule(action) {
+	return protect(function(req) {
+		let session = req.args.ubus_rpc_session;
+		if (!session || session == '00000000000000000000000000000000') die('请重新登录 LuCI。');
+		return enqueue(action, req.args.data, session);
+	});
+}
+return {
+	'luci.tailscale_gateway': {
+		status: { call: protect(() => ({ ...read_json(RUN + '/snapshot.json', { node: { state: 'Unknown' }, warnings: ['状态正在采集，请稍后刷新。'] }), last_apply: read_json(STATE + '/last-apply.json', null), recovery: read_json(STATE + '/pending.json', null)?.state })) },
+		config: { call: protect(configuration) },
+		plan: { args: { data: {} }, call: protect((req) => make_plan(req.args.data)) },
+		release_plan: { args: { data: {} }, call: protect((req) => release_plan(req.args.data)) },
+		release: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('release') },
+		apply: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('apply') },
+		node_action: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('node_action') },
+		dns_sync: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('dns_sync') },
+		diagnose: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('diagnose') },
+		rollback: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('rollback') },
+		recover: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('recover') },
+		job_status: { args: { id: '', ubus_rpc_session: '' }, call: protect((req) => {
+			if (!match(req.args.id, /^[a-f0-9]{24}$/)) die('Invalid job ID');
+			let job = read_json(RUN + '/jobs/' + req.args.id + '.json', null);
+			if (!job || job.owner != req.args.ubus_rpc_session) die('Job unavailable in this session');
+			if ((job.state == 'queued' && time() - job.created_at > 30) || (job.state == 'running' && job.pid && !access('/proc/' + job.pid))) {
+				job.state = 'failed'; job.error = '后台任务未能启动或已意外退出。请查看服务日志和待恢复事务，再重新预览。';
+			}
+			return { id: job.id, action: job.action, state: job.state, result: job.result, error: job.error, created_at: job.created_at, finished_at: job.finished_at };
+		}) },
+		logs: { call: protect(logs) }
+	}
+};

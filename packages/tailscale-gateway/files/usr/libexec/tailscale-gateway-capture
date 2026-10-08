@@ -1,0 +1,5 @@
+#!/bin/sh
+# No command text is evaluated: the caller supplies a validated argument vector.
+out=$1
+shift
+exec "$@" >"$out" 2>&1

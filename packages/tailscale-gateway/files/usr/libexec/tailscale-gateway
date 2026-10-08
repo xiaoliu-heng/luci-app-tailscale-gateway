@@ -1,0 +1,30 @@
+#!/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+RUN=/var/run/tailscale-gateway
+mkdir -p "$RUN"
+chmod 700 "$RUN"
+case "$1" in
+    collect)
+        exec 8>"$RUN/collector.lock"
+        flock -n 8 || exit 0
+        sleeper='' stop=0
+        trap 'stop=1; [ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' TERM INT
+        trap '[ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' USR1 HUP
+        while [ "$stop" = 0 ]; do
+            ucode /usr/share/tailscale-gateway/main.uc snapshot >"$RUN/collector-output.json" 2>"$RUN/collector-error.log"
+            sleep 15 & sleeper=$!
+            wait "$sleeper" 2>/dev/null; sleeper=''
+        done
+        ;;
+    start-job)
+        case "$2" in ''|*[!a-f0-9]*) exit 2;; esac
+        [ ${#2} = 24 ] || exit 2
+        (trap '' HUP; exec /usr/libexec/tailscale-gateway job "$2") </dev/null >"$RUN/job-output.log" 2>&1 &
+        ;;
+    job)
+        exec 9>"$RUN/apply.lock"
+        flock -n 9 || exit 1
+        exec ucode /usr/share/tailscale-gateway/main.uc job "$2"
+        ;;
+    *) exec ucode /usr/share/tailscale-gateway/main.uc "$@";;
+esac

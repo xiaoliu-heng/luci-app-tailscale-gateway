@@ -1,0 +1,172 @@
+#!/bin/sh
+# Local Tailscale DNS metadata -> scoped dnsmasq UCI rules.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+STATE=/etc/tailscale-gateway/dns
+RUN=/var/run/tailscale-gateway/dns
+COMPILER=/usr/share/tailscale-gateway/dns-render.uc
+. /lib/functions.sh
+config_load tailscale_gateway
+config_get POLL dns interval 60
+config_get RETRY dns retry 5
+config_get INSTANCE dns instance ''
+INSTANCE=${TSG_DNS_INSTANCE:-$INSTANCE}
+case "$POLL:$RETRY" in *[!0-9:]*|:*) exit 2;; esac
+umask 077
+mkdir -p "$RUN"
+
+record() {
+    record_kind=$1
+    record_reason=$2
+    record_previous=$(jsonfilter -i "$RUN/status.json" -e @.reason 2>/dev/null || true)
+    /usr/bin/ucode "$COMPILER" record "$RUN/status.json" "$record_kind" "$record_reason"
+    if [ "$record_reason" != "$record_previous" ]; then
+        logger -t tailscale-gateway-dns "$record_kind: $record_reason"
+    fi
+}
+
+atomic_copy() {
+    cp "$1" "$2.new" && chmod 600 "$2.new" && mv -f "$2.new" "$2"
+}
+
+sync_once() (
+    exec 9>"$RUN/sync.lock"
+    tsds_lock_attempt=0
+    until flock -n 9; do
+        tsds_lock_attempt=$((tsds_lock_attempt + 1))
+        [ "$tsds_lock_attempt" -le 10 ] || { echo 'DNS synchronization is busy; retry shortly' >&2; exit 1; }
+        sleep 1
+    done
+    tsds_work=$(mktemp -d "$RUN/check.XXXXXX") || exit 1
+    trap 'rm -rf "$tsds_work"' EXIT
+    tsds_fail() {
+        tsds_reason=$(head -c 500 "$tsds_work/error" 2>/dev/null | tr '\n' ' ')
+        record error "${tsds_reason:-$1}"
+        exit 1
+    }
+    if [ "${1:-}" = '--restore' ]; then
+        cp "$2" "$tsds_work/desired.json" || exit 1
+    elif [ "${1:-}" = '--clear' ]; then
+        printf '%s\n' '{"version":1,"server":[],"rebind_domain":[]}' >"$tsds_work/desired.json"
+    else
+    timeout -k 2 10 tailscale status --json >"$tsds_work/status.json" 2>"$tsds_work/error" || tsds_fail 'Cannot read Tailscale state'
+    timeout -k 2 10 tailscale dns status --json >"$tsds_work/dns.json" 2>"$tsds_work/error" || tsds_fail 'Cannot read Tailscale DNS settings'
+    ip -j address show >"$tsds_work/addresses.json" || tsds_fail 'Cannot read local interface addresses'
+    ucode "$COMPILER" render "$tsds_work/dns.json" "$tsds_work/status.json" "$tsds_work/desired.json" "$tsds_work/addresses.json" 2>"$tsds_work/error" || tsds_fail 'Tailscale DNS settings are not ready'
+    fi
+
+    # Never commit over another administrator's pending UCI edits.
+    for tsds_pending in /tmp/.uci/dhcp /tmp/run/rpcd/uci-*/dhcp; do
+        [ ! -s "$tsds_pending" ] || { record deferred 'Pending UCI edits to dhcp; preserving them'; exit 1; }
+    done
+    [ -z "$(uci -q changes dhcp)" ] || { record deferred 'Pending UCI edits to dhcp; preserving them'; exit 1; }
+    mkdir -p "$tsds_work/config" "$tsds_work/save"
+    cp /etc/config/dhcp "$tsds_work/before"
+    cp /etc/config/dhcp "$tsds_work/config/dhcp"
+    if [ -f "$STATE/owned.json" ]; then
+        cp "$STATE/owned.json" "$tsds_work/previous.json"
+    else
+        echo '{"version":1,"server":[],"rebind_domain":[]}' >"$tsds_work/previous.json"
+    fi
+    ucode "$COMPILER" stage "$tsds_work/desired.json" "$tsds_work/previous.json" \
+        "$tsds_work/config" "$tsds_work/save" "$tsds_work" "$INSTANCE" 2>"$tsds_work/error" || tsds_fail 'Cannot stage DNS rules'
+
+    if [ "${1:-}" = '--dry-run' ]; then
+        cat "$tsds_work/forward.conf"
+        exit 0
+    fi
+    tsds_section=$(cat "$tsds_work/section")
+    tsds_runtime="/var/etc/dnsmasq.conf.$tsds_section"
+    [ -f "$tsds_runtime" ] || { record error 'dnsmasq runtime configuration is unavailable'; exit 1; }
+    # Validate the complete current configuration with only our managed lists replaced.
+    awk '!/^server=/ && !/^rebind-domain-ok=/' "$tsds_runtime" >"$tsds_work/dnsmasq.conf"
+    cat "$tsds_work/forward.conf" >>"$tsds_work/dnsmasq.conf"
+    dnsmasq --test --conf-file="$tsds_work/dnsmasq.conf" 2>"$tsds_work/error" || tsds_fail 'dnsmasq rejected the candidate'
+    if cmp -s "$tsds_work/config/dhcp" "$tsds_work/before"; then
+        if ! cmp -s "$tsds_work/owned.json" "$STATE/owned.json"; then
+            mkdir -p "$STATE"
+            atomic_copy "$tsds_work/owned.json" "$STATE/owned.json" || exit 1
+        fi
+        record unchanged 'DNS rules match Tailscale'
+        exit 0
+    fi
+    [ -z "$(uci -q changes dhcp)" ] && cmp -s /etc/config/dhcp "$tsds_work/before" || {
+        record deferred 'DHCP configuration changed during synchronization; retrying'
+        exit 1
+    }
+    mkdir -p "$STATE"
+    # Write a superset ownership journal first. This also recovers safely after power loss.
+    atomic_copy "$tsds_work/pending.json" "$STATE/owned.json" || exit 1
+    atomic_copy "$tsds_work/before" "$STATE/previous-dhcp" || exit 1
+    atomic_copy "$tsds_work/config/dhcp" /etc/config/dhcp || exit 1
+    tsds_ok=0
+    tsds_probe=127.0.0.1
+    tsds_listen=$(uci -q get "dhcp.$tsds_section.listen_address" || true)
+    if [ -n "$tsds_listen" ]; then
+        for tsds_address in $tsds_listen; do
+            case "$tsds_address" in 0.0.0.0|::) ;; *) tsds_probe=$tsds_address; break;; esac
+        done
+    else
+        for tsds_iface in $(uci -q get "dhcp.$tsds_section.interface" || true); do
+            tsds_address=$(ubus call "network.interface.$tsds_iface" status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address')
+            [ -z "$tsds_address" ] || { tsds_probe=$tsds_address; break; }
+        done
+    fi
+    if timeout -k 2 25 /etc/init.d/dnsmasq reload >"$tsds_work/reload.log" 2>&1; then
+        tsds_n=0
+        while [ "$tsds_n" -lt 8 ]; do
+            tsds_running=$(ubus call service list '{"name":"dnsmasq"}' | jsonfilter -e "@.dnsmasq.instances[\"$tsds_section\"].running")
+            if [ "$tsds_running" = true ] && timeout -k 1 2 nslookup localhost "$tsds_probe" >/dev/null 2>&1; then
+                tsds_ok=1
+                break
+            fi
+            tsds_n=$((tsds_n + 1))
+            sleep 1
+        done
+    fi
+    if [ "$tsds_ok" -ne 1 ]; then
+        # Revert only if no concurrent edit has superseded our candidate.
+        if cmp -s /etc/config/dhcp "$tsds_work/config/dhcp"; then
+            atomic_copy "$tsds_work/before" /etc/config/dhcp
+            atomic_copy "$tsds_work/previous.json" "$STATE/owned.json"
+            timeout -k 2 25 /etc/init.d/dnsmasq reload >/dev/null 2>&1
+            record error 'dnsmasq did not recover after reload; previous DHCP configuration restored'
+        else
+            record error 'dnsmasq verification failed; a concurrent DHCP edit prevented rollback'
+        fi
+        exit 1
+    fi
+    atomic_copy "$tsds_work/owned.json" "$STATE/owned.json" || exit 1
+    atomic_copy "$tsds_work/desired.json" "$STATE/last-good.json" || exit 1
+    record updated 'Applied updated Tailscale DNS rules'
+)
+
+run_service() {
+    exec 8>"$RUN/daemon.lock"
+    flock -n 8 || exit 1
+    tsds_stop=0
+    tsds_wake=0
+    tsds_sleeper=''
+    trap 'tsds_stop=1; [ -z "$tsds_sleeper" ] || kill "$tsds_sleeper" 2>/dev/null || true' TERM INT
+    trap 'tsds_wake=1; [ -z "$tsds_sleeper" ] || kill "$tsds_sleeper" 2>/dev/null || true' USR1 HUP
+    while [ "$tsds_stop" -eq 0 ]; do
+        tsds_wake=0
+        if sync_once; then tsds_delay=$POLL; else tsds_delay=$RETRY; fi
+        [ "$tsds_stop" -eq 0 ] || break
+        [ "$tsds_wake" -eq 0 ] || tsds_delay=2
+        sleep "$tsds_delay" &
+        tsds_sleeper=$!
+        wait "$tsds_sleeper" 2>/dev/null || true
+        tsds_sleeper=''
+        # One worker serializes all triggers; a burst becomes one fresh check.
+    done
+}
+
+case "${1:-}" in
+    run) run_service ;;
+    sync) sync_once ;;
+    --dry-run) sync_once --dry-run ;;
+    clear) sync_once --clear ;;
+    restore) sync_once --restore "$2" ;;
+    status) cat "$RUN/status.json" ;;
+    *) echo 'Usage: tailscale-dns-sync run|sync|--dry-run|status' >&2; exit 2 ;;
+esac

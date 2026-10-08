@@ -1,0 +1,55 @@
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=91
+STOP=9
+
+start_service() {
+    local managed enabled mode fingerprint
+    config_load tailscale_gateway
+    config_get_bool managed main managed 0
+    procd_open_instance collector
+    procd_set_param command /usr/libexec/tailscale-gateway collect
+    procd_set_param respawn 60 5 0
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+    [ "$managed" = 1 ] || return 0
+    [ -s /etc/tailscale-gateway/owned.json ] || return 0
+    config_get_bool enabled uplink enabled 0
+    if [ "$enabled" = 1 ]; then
+        if procd_running tailscale-uplink; then
+            logger -t tailscale-gateway 'Legacy uplink worker is running; refusing duplicate ownership'
+            return 0
+        fi
+        fingerprint=$(uci -q show tailscale_gateway.uplink | sha256sum | cut -d' ' -f1)
+        procd_open_instance uplink
+        procd_set_param command /usr/libexec/tailscale-gateway-uplink "$fingerprint"
+        procd_set_param data "configuration=$fingerprint"
+        procd_set_param respawn 60 5 0
+        procd_set_param term_timeout 6
+        procd_set_param stderr 1
+        procd_close_instance
+    fi
+    config_get mode dns mode off
+    if [ "$mode" = sync ]; then
+        if procd_running tailscale-dns-sync; then
+            logger -t tailscale-gateway 'Legacy DNS worker is running; refusing duplicate ownership'
+            return 0
+        fi
+        fingerprint=$(uci -q show tailscale_gateway.dns | sha256sum | cut -d' ' -f1)
+        procd_open_instance dns
+        procd_set_param command /usr/libexec/tailscale-gateway-dns run "$fingerprint"
+        procd_set_param data "configuration=$fingerprint"
+        procd_set_param respawn 60 5 0
+        procd_set_param term_timeout 45
+        procd_set_param stderr 1
+        procd_close_instance
+    fi
+}
+
+service_triggers() { procd_add_reload_trigger tailscale_gateway; }
+
+boot() {
+    /usr/libexec/tailscale-gateway recover
+    start
+}

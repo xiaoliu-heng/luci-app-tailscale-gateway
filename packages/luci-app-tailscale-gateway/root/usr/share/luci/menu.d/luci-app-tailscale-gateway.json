@@ -1,0 +1,62 @@
+{
+  "admin/services/tailscale-gateway": {
+    "title": "Tailscale 网关",
+    "order": 60,
+    "action": {
+      "type": "firstchild"
+    },
+    "depends": {
+      "acl": [
+        "luci-app-tailscale-gateway"
+      ]
+    }
+  },
+  "admin/services/tailscale-gateway/overview": {
+    "title": "概览",
+    "order": 10,
+    "action": {
+      "type": "view",
+      "path": "tailscale-gateway/v0_1_0_r4/overview"
+    }
+  },
+  "admin/services/tailscale-gateway/node": {
+    "title": "节点与连接",
+    "order": 20,
+    "action": {
+      "type": "view",
+      "path": "tailscale-gateway/v0_1_0_r4/node"
+    }
+  },
+  "admin/services/tailscale-gateway/uplink": {
+    "title": "上联策略",
+    "order": 30,
+    "action": {
+      "type": "view",
+      "path": "tailscale-gateway/v0_1_0_r4/uplink"
+    }
+  },
+  "admin/services/tailscale-gateway/access": {
+    "title": "访问与路由",
+    "order": 40,
+    "action": {
+      "type": "view",
+      "path": "tailscale-gateway/v0_1_0_r4/access"
+    }
+  },
+  "admin/services/tailscale-gateway/dns": {
+    "title": "DNS",
+    "order": 50,
+    "action": {
+      "type": "view",
+      "path": "tailscale-gateway/v0_1_0_r4/dns"
+    }
+  },
+  "admin/services/tailscale-gateway/diagnostics": {
+    "title": "诊断与日志",
+    "order": 60,
+    "action": {
+      "type": "view",
+      "path": "tailscale-gateway/v0_1_0_r4/diagnostics"
+    }
+  }
+}

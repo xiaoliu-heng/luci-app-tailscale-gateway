@@ -1,0 +1,13 @@
+#!/bin/sh
+case "$ACTION" in ifup|ifupdate|ifdown) ;; *) exit 0;; esac
+[ "$(uci -q get tailscale_gateway.main.managed)" = 1 ] || exit 0
+. /lib/functions.sh
+. /lib/functions/procd.sh
+procd_send_signal tailscale-gateway collector USR1 >/dev/null 2>&1
+case "$INTERFACE" in
+    "$(uci -q get tailscale_gateway.uplink.preferred)"|"$(uci -q get tailscale_gateway.uplink.preferred6)")
+        procd_send_signal tailscale-gateway uplink USR1 >/dev/null 2>&1;;
+esac
+if [ "$INTERFACE" = "$(uci -q get tailscale_gateway.access.interface)" ]; then
+    procd_send_signal tailscale-gateway dns USR1 >/dev/null 2>&1
+fi

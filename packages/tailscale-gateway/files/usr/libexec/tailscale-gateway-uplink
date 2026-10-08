@@ -1,0 +1,156 @@
+#!/bin/sh
+# One owned policy table, independent IPv4/IPv6 health, system-route fallback.
+. /lib/functions.sh
+config_load tailscale_gateway
+config_get preferred uplink preferred ''
+config_get preferred6 uplink preferred6 ''
+config_get TABLE uplink table 203
+config_get interval uplink interval 10
+config_get fail_count uplink fail_count 3
+config_get recover_count uplink recover_count 2
+config_get restart_on_change uplink restart_on_change 1
+config_get probes uplink probes '223.5.5.5 119.29.29.29'
+config_get probes6 uplink probes6 '2400:3200::1 2606:4700:4700::1111'
+RUN=/var/run/tailscale-gateway
+mkdir -p "$RUN"
+case "$TABLE:$interval:$fail_count:$recover_count" in *[!0-9:]*|:*) exit 2;; esac
+[ "$TABLE" -ge 100 ] && [ "$TABLE" -le 250 ] && [ "$TABLE" -ne 202 ] || exit 2
+[ "$interval" -ge 5 ] && [ "$interval" -le 300 ] || exit 2
+[ "$fail_count" -ge 1 ] && [ "$fail_count" -le 20 ] || exit 2
+[ "$recover_count" -ge 1 ] && [ "$recover_count" -le 20 ] || exit 2
+[ "$(jsonfilter -i /etc/tailscale-gateway/owned.json -e '@.resources[@.key="tsg_transport4"].applied.options.lookup')" = "$TABLE" ] || exit 2
+case "$preferred:$preferred6" in *[!a-zA-Z0-9_.:-]*) exit 2;; esac
+for target in $probes; do case "$target" in *[!0-9.]*) exit 2;; esac; done
+for target in $probes6; do case "$target" in *[!0-9a-fA-F:]*) exit 2;; esac; done
+exec 8>"$RUN/uplink.lock"
+flock -n 8 || exit 0
+ready4=0 ready6=0 failures=0 failures6=0
+# On service handoff, one successful observation preserves an already usable
+# path. Hysteresis applies after a subsequent health failure.
+successes=$((recover_count - 1)) successes6=$((recover_count - 1))
+applied=$(cat "$RUN/uplink-applied" 2>/dev/null || true)
+first=1 sleeper='' stopping=0
+
+clear_routes() {
+    ip -4 route flush table "$TABLE" >/dev/null 2>&1
+    ip -6 route flush table "$TABLE" >/dev/null 2>&1
+}
+cleanup() {
+    stopping=1
+    [ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null
+    clear_routes
+    rm -f "$RUN/uplink.json"
+    exit 0
+}
+trap cleanup TERM INT
+trap '[ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' USR1 HUP
+
+get4() {
+    [ -n "$preferred" ] || return 1
+    data=$(ubus call "network.interface.$preferred" status 2>/dev/null) || return 1
+    [ "$(jsonfilter -s "$data" -e '@.up')" = true ] || return 1
+    device=$(jsonfilter -s "$data" -e '@.l3_device')
+    address=$(jsonfilter -s "$data" -e '@["ipv4-address"][0].address')
+    routes=$(ip -4 -j route show table main default dev "$device") || return 1
+    [ "$(jsonfilter -s "$routes" -e '@[0].dst')" = default ] || return 1
+    gateway=$(jsonfilter -s "$routes" -e '@[0].gateway')
+    [ -n "$device" ] && [ -n "$address" ]
+}
+get6() {
+    [ -n "$preferred6" ] || return 1
+    data=$(ubus call "network.interface.$preferred6" status 2>/dev/null) || return 1
+    [ "$(jsonfilter -s "$data" -e '@.up')" = true ] || return 1
+    device6=$(jsonfilter -s "$data" -e '@.l3_device')
+    address6=''
+    for candidate in $(jsonfilter -s "$data" -e '@["ipv6-address"][*].address'); do
+        case "$candidate" in 2*:*|3*:*) address6=$candidate; break;; esac
+    done
+    [ -n "$device6" ] && [ -n "$address6" ] || return 1
+    routes=$(ip -6 -j route show table main default dev "$device6") || return 1
+    [ "$(jsonfilter -s "$routes" -e '@[0].dst')" = default ] || return 1
+    gateway6=$(jsonfilter -s "$routes" -e '@[0].gateway')
+    return 0
+}
+probe() {
+    family=$1 dev=$2
+    shift 2
+    for target in "$@"; do
+        ping "-$family" -I "$dev" -c 1 -W 2 "$target" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+route4() {
+    if [ "$ready4" = 1 ]; then
+        if [ -n "$gateway" ]; then
+            ip -4 route replace table "$TABLE" default via "$gateway" dev "$device" onlink src "$address" metric 10
+        else
+            ip -4 route replace table "$TABLE" default dev "$device" src "$address" metric 10
+        fi
+    else
+        ip -4 route flush table "$TABLE"
+    fi
+}
+route6() {
+    if [ "$ready6" = 1 ]; then
+        if [ -n "$gateway6" ]; then
+            ip -6 route replace table "$TABLE" default via "$gateway6" dev "$device6" onlink src "$address6" metric 10
+        else
+            ip -6 route replace table "$TABLE" default dev "$device6" src "$address6" metric 10
+        fi
+    elif [ "$ready4" = 1 ]; then
+        ip -6 route replace table "$TABLE" prohibit default metric 10
+    else
+        ip -6 route flush table "$TABLE"
+    fi
+}
+while [ "$stopping" = 0 ]; do
+    if get4; then
+        if probe 4 "$device" $probes; then
+            failures=0
+            successes=$((successes + 1)); [ "$successes" -le "$recover_count" ] || successes=$recover_count
+            [ "$successes" -lt "$recover_count" ] || ready4=1
+        else
+            successes=0; failures=$((failures + 1))
+            [ "$failures" -le "$fail_count" ] || failures=$fail_count
+            [ "$failures" -lt "$fail_count" ] || ready4=0
+        fi
+    else ready4=0 successes=0 failures=$fail_count; fi
+    if get6; then
+        if probe 6 "$device6" $probes6; then
+            failures6=0
+            successes6=$((successes6 + 1)); [ "$successes6" -le "$recover_count" ] || successes6=$recover_count
+            [ "$successes6" -lt "$recover_count" ] || ready6=1
+        else
+            successes6=0; failures6=$((failures6 + 1))
+            [ "$failures6" -le "$fail_count" ] || failures6=$fail_count
+            [ "$failures6" -lt "$fail_count" ] || ready6=0
+        fi
+    else ready6=0 successes6=0 failures6=$fail_count; fi
+    active=system ipv6=system
+    [ "$ready4" = 0 ] || active=$preferred
+    [ "$ready4" = 0 ] || ipv6=blocked
+    [ "$ready6" = 0 ] || ipv6=$preferred6
+    wanted="$active:$ipv6"
+    [ "$ready4" = 0 ] || wanted="$wanted:$device:$gateway:$address"
+    [ "$ready6" = 0 ] || wanted="$wanted:$device6:$gateway6:$address6"
+    error=''
+    if [ "$first" = 1 ] || [ "$wanted" != "$applied" ]; then
+        if route4 && route6; then
+            logger -t tailscale-gateway "uplink IPv4=$active IPv6=$ipv6"
+            if [ -n "$applied" ] && [ "$wanted" != "$applied" ] && [ "$restart_on_change" = 1 ] && pidof tailscaled >/dev/null; then
+                /etc/init.d/tailscale restart >/dev/null 2>&1 || error='Tailscale restart failed'
+            fi
+            applied=$wanted
+            printf '%s\n' "$applied" >"$RUN/uplink-applied"
+            first=0
+        else
+            clear_routes; ready4=0 ready6=0 active=system ipv6=system applied=''
+            error='Policy route update failed; using system routing'
+        fi
+    fi
+    printf '{"preferred":"%s","preferred6":"%s","active":"%s","ipv6":"%s","successes":%s,"failures":%s,"ipv6_successes":%s,"ipv6_failures":%s,"checked_at":%s,"error":"%s"}\n' \
+        "$preferred" "$preferred6" "$active" "$ipv6" "$successes" "$failures" "$successes6" "$failures6" "$(date +%s)" "$error" >"$RUN/uplink.json.new"
+    mv "$RUN/uplink.json.new" "$RUN/uplink.json"
+    sleep "$interval" & sleeper=$!
+    wait "$sleeper" 2>/dev/null; sleeper=''
+done

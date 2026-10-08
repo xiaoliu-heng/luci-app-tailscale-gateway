@@ -1,0 +1,25 @@
+.tsg-app .tsg-intro { max-width: 70ch; margin-bottom: 1.5rem; }
+.tsg-app .tsg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin: 1rem 0; }
+.tsg-app .tsg-section { margin-top: 1.5rem; }
+.tsg-app .tsg-table { overflow-x: auto; max-width: 100%; }
+.tsg-app .tsg-table td { vertical-align: top; overflow-wrap: anywhere; }
+.tsg-app .tsg-table th { text-align: left; }
+.tsg-app .tsg-inline { display: inline-flex; align-items: center; flex-wrap: wrap; gap: .5rem; }
+.tsg-app .tsg-address { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tsg-app pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24rem; overflow: auto; font-size: .875rem; line-height: 1.45; }
+.tsg-app details { margin: 1.25rem 0; }
+.tsg-app summary { cursor: pointer; margin-bottom: 1rem; }
+.tsg-app .tsg-fields textarea { width: min(100%, 32rem); min-height: 4.5rem; }
+.tsg-app .tsg-fields input:not([type=checkbox]), .tsg-app .tsg-fields select { max-width: 100%; }
+.tsg-app select[multiple] { min-width: 16rem; background-color: transparent; color: inherit; }
+.tsg-app .cbi-value-description { max-width: 68ch; }
+.tsg-app #tsg-check-kind, .tsg-app #tsg-check-target { display: block; margin: .5rem 0 1rem; max-width: 100%; }
+.tsg-copy { position: fixed; inset-inline-start: -10000px; top: 0; }
+@media (max-width: 600px) {
+ .tsg-app .cbi-value label.cbi-value-title { float: none; display: block; width: 100%; min-width: 0; text-align: left; margin-bottom: .4rem; }
+ .tsg-app .cbi-value-field { display: block; width: 100%; min-width: 0; margin-left: 0; padding: 0; }
+ .tsg-app .cbi-value { display: block; width: 100%; padding: .75rem 0; }
+ .tsg-app .tsg-wide table { min-width: 42rem; }
+ .tsg-app select[multiple] { min-width: 0; width: 100%; }
+ .tsg-app .tsg-toolbar .cbi-button { min-height: 2.5rem; }
+}
