@@ -55,6 +55,9 @@ if r.returncode: sys.exit(r.returncode)
 r=subprocess.run(['ssh',host,'TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/subnets.uc'],capture_output=True,text=True)
 print(r.stdout);print(r.stderr,end='')
 if r.returncode: sys.exit(r.returncode)
+result=subprocess.run(['ssh',host,'TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/events.uc'],capture_output=True,text=True)
+print(result.stdout);print(result.stderr,end='')
+if result.returncode: sys.exit(result.returncode)
 command='TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/atomic.uc '
 writers=[subprocess.Popen(['ssh',host,command+name],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for name in ['collector','subnets']]
 for writer in writers:

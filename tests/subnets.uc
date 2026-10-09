@@ -3,7 +3,7 @@ import { ROOT, RUN, STATE, read_json, save_json, revision, section, config_curso
 import { configuration, collect } from '../root/usr/share/tailscale-gateway/state.uc';
 import { validate, make_plan } from '../root/usr/share/tailscale-gateway/planner.uc';
 import { apply_config, rollback } from '../root/usr/share/tailscale-gateway/apply.uc';
-import { GUARD, KNOWN, discover_subnets, subnet_guard, sync_subnets, known_subnets } from '../root/usr/share/tailscale-gateway/subnets.uc';
+import { GUARD, KNOWN, discover_subnets, subnet_guard, sync_subnets, known_subnets, set_matches } from '../root/usr/share/tailscale-gateway/subnets.uc';
 let count = 0;
 function assert(test, name) { if (!test) die('FAIL: ' + name); count++; print('PASS ' + name + '\n'); }
 function rejects(fn, name) { let failed = false; try { fn(); } catch (e) { failed = true; } assert(failed, name); }
@@ -66,6 +66,16 @@ assert(filter(plan.resources, (r) => r.key == 'tsg_local_0')[0].applied.options.
 apply_config(input, '777777777777777777777777');
 assert(configuration().value.access.remote_enabled && known_subnets()[0] == '203.0.113.0/24', 'enable transaction starts sync and seeds restart protection');
 assert(index(fs.readfile(ROOT + '/last-nft.txt'), 'add element inet fw4 tsg_remote_active { 203.0.113.0/24 }') >= 0, 'effective route installed in active firewall set');
+let idle = sync_subnets(configuration().value, collect());
+assert(idle.state == 'ok' && !idle.changed, 'identical kernel sets are not rewritten');
+let merged = { nftables: [{ set: { family: 'inet', table: 'fw4', name: 'tsg_remote_active', type: 'ipv4_addr', elem: [{ prefix: { addr: '203.0.113.0', len: 24 } }] } }] };
+assert(set_matches(merged, 'tsg_remote_active', ['203.0.113.0/25', '203.0.113.128/25']), 'auto-merged adjacent CIDRs do not cause perpetual rewrites');
+merged.nftables[0].set.elem = [{ range: ['203.0.113.0', '203.0.113.255'] }];
+assert(set_matches(merged, 'tsg_remote_active', ['203.0.113.0/24']), 'nft range representation matches the same coverage');
+assert(!set_matches(merged, 'tsg_remote_active', ['203.0.113.0/25']), 'extra kernel destinations are detected');
+fs.unlink(ROOT + '/nft-sets.json');
+let repaired = sync_subnets(configuration().value, collect());
+assert(repaired.changed && repaired.state == 'ok', 'empty kernel sets after reload recover even when desired routes are unchanged');
 save_json(ROOT + '/routes4.json', []);
 let synced = sync_subnets(configuration().value, collect());
 assert(synced.state == 'ok' && !length(synced.active) && length(synced.known) == 1, 'live withdrawal closes LAN access without forgetting destination');

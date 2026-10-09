@@ -15,6 +15,8 @@ try {
 		if (!cfg.managed || !cfg.value.access.remote_enabled || !read_json(STATE + '/owned.json', null)) die('远端子网同步未启用。');
 		let snap = collect();
 		value = sync_subnets(configuration().value, snap);
+		snap.subnets = { ...value, enabled: true, applied: value.active };
+		save_json(RUN + '/snapshot.json', snap);
 	}
 	else if (ARGV[0] == 'config') value = configuration();
 	else if (ARGV[0] == 'plan') value = make_plan(json(fs.readfile(ARGV[1])));
@@ -25,5 +27,7 @@ try {
 		if (configuration().managed) die('Gateway policies are still managed. Revert adoption before removing the package.');
 		value = { ok: true };
 	} else die('Unknown command');
-	print(sprintf('%J\n', { ok: true, data: value }));
+	let ok = ARGV[0] != 'subnet-sync' || value.state == 'ok';
+	print(sprintf('%J\n', { ok, data: value }));
+	if (!ok) exit(1);
 } catch (e) { print(sprintf('%J\n', { ok: false, error: e.message || '' + e })); exit(1); }

@@ -1,0 +1,42 @@
+#!/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+RUN=/var/run/tailscale-gateway
+case "$1" in tailscale|route|firewall) source=$1;; *) exit 2;; esac
+umask 077
+mkdir -p "$RUN"
+exec 8>"$RUN/events-$source.lock"
+flock -n 8 || exit 0
+work=$(mktemp -d "$RUN/events-$source.XXXXXX") || exit 1
+mkfifo "$work/input" || exit 1
+monitor='' reader='' sleeper='' stop=0 delay=2
+cleanup_children() {
+    for child in "$monitor" "$reader" "$sleeper"; do
+        [ -z "$child" ] || kill "$child" 2>/dev/null
+    done
+}
+trap 'stop=1; cleanup_children' TERM INT HUP
+trap 'cleanup_children; rm -rf "$work"' EXIT
+while [ "$stop" = 0 ]; do
+    started=$(cut -d. -f1 /proc/uptime)
+    case "$source" in
+        tailscale) tailscale debug watch-ipn --initial >"$work/input" 2>/dev/null &;;
+        route) ip -4 -o monitor route address link >"$work/input" 2>/dev/null &;;
+        firewall) nft monitor ruleset >"$work/input" 2>/dev/null &;;
+    esac
+    monitor=$!
+    ucode /usr/share/tailscale-gateway/event-reader.uc "$source" <"$work/input" >/dev/null 2>/dev/null &
+    reader=$!
+    wait "$reader" 2>/dev/null
+    cleanup_children
+    wait "$monitor" 2>/dev/null
+    wait "$reader" 2>/dev/null
+    monitor='' reader=''
+    [ "$stop" = 0 ] || break
+    ucode /usr/share/tailscale-gateway/event-reader.uc "$source" disconnected >/dev/null 2>/dev/null
+    ended=$(cut -d. -f1 /proc/uptime)
+    [ $((ended - started)) -lt 60 ] || delay=2
+    sleep "$delay" & sleeper=$!
+    [ "$stop" = 0 ] || kill "$sleeper" 2>/dev/null
+    wait "$sleeper" 2>/dev/null; sleeper=''
+    delay=$((delay * 2)); [ "$delay" -le 60 ] || delay=60
+done

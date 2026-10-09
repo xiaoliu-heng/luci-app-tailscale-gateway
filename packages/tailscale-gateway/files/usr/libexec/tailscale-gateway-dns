@@ -143,22 +143,8 @@ sync_once() (
 run_service() {
     exec 8>"$RUN/daemon.lock"
     flock -n 8 || exit 1
-    tsds_stop=0
-    tsds_wake=0
-    tsds_sleeper=''
-    trap 'tsds_stop=1; [ -z "$tsds_sleeper" ] || kill "$tsds_sleeper" 2>/dev/null || true' TERM INT
-    trap 'tsds_wake=1; [ -z "$tsds_sleeper" ] || kill "$tsds_sleeper" 2>/dev/null || true' USR1 HUP
-    while [ "$tsds_stop" -eq 0 ]; do
-        tsds_wake=0
-        if sync_once; then tsds_delay=$POLL; else tsds_delay=$RETRY; fi
-        [ "$tsds_stop" -eq 0 ] || break
-        [ "$tsds_wake" -eq 0 ] || tsds_delay=2
-        sleep "$tsds_delay" &
-        tsds_sleeper=$!
-        wait "$tsds_sleeper" 2>/dev/null || true
-        tsds_sleeper=''
-        # One worker serializes all triggers; a burst becomes one fresh check.
-    done
+    . /usr/share/tailscale-gateway/worker.sh
+    tsg_worker "$POLL" "$RETRY" sync_once
 }
 
 case "${1:-}" in

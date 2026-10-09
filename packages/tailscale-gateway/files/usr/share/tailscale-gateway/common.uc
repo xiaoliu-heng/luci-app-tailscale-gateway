@@ -6,6 +6,13 @@ export const ROOT = getenv('TSG_ROOT') || '';
 export const RUN = ROOT + '/var/run/tailscale-gateway';
 export const STATE = ROOT + '/etc/tailscale-gateway';
 export const SHARE = ROOT + '/usr/share/tailscale-gateway';
+export function usr1_signal() {
+	// Signal numbers differ on e.g. MIPS and ARM OpenWrt targets.
+	let pipe = fs.popen('kill -l USR1', 'r');
+	let number = pipe ? int(trim(pipe.read('all') || '')) : null;
+	if (pipe) pipe.close();
+	return number > 0 && number < 128 ? number : null;
+}
 export function uuid() { return substr(sha256(fs.readfile('/proc/sys/kernel/random/uuid') || die('No random source')), 0, 24); }
 export function ensure() {
 	system(['/bin/mkdir', '-p', RUN, STATE, ROOT + '/tmp/tsg-read']);

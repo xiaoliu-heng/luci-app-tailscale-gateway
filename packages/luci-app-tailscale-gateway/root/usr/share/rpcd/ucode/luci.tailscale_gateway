@@ -1,8 +1,27 @@
-import { read_json, RUN, STATE } from '/usr/share/tailscale-gateway/common.uc';
+import { read_json, save_json, usr1_signal, RUN, STATE } from '/usr/share/tailscale-gateway/common.uc';
+import { connect } from 'ubus';
 import { configuration } from '/usr/share/tailscale-gateway/state.uc';
 import { make_plan, release_plan } from '/usr/share/tailscale-gateway/planner.uc';
 import { enqueue, logs } from '/usr/share/tailscale-gateway/operations.uc';
 import { access } from 'fs';
+let refresh_signal = usr1_signal();
+
+function status() {
+	let snap = read_json(RUN + '/snapshot.json', { node: { state: 'Unknown' }, warnings: ['状态正在采集，请稍后刷新。'] });
+	// Keep the idle collector at 60s; an open LuCI page requests fresh
+	// status at most once per 15s. Return cached data without blocking RPC.
+	if (time() - (snap.checked_at || 0) >= 15 && time() - read_json(RUN + '/refresh-request.json', 0) >= 10 && refresh_signal) {
+		let bus = connect();
+		if (bus) {
+			bus.call('service', 'signal', { name: 'tailscale-gateway', instance: 'collector', signal: refresh_signal });
+			bus.disconnect(); save_json(RUN + '/refresh-request.json', time());
+		}
+	}
+	let subnets = read_json(RUN + '/subnets.json', null);
+	if (snap.subnets?.enabled && subnets && subnets.checked_at >= (snap.subnets.checked_at || 0))
+		snap.subnets = { ...subnets, enabled: true, applied: subnets.active || [] };
+	return { ...snap, last_apply: read_json(STATE + '/last-apply.json', null), recovery: read_json(STATE + '/pending.json', null)?.state };
+}
 
 function protect(fn) {
 	return function(req) {
@@ -19,7 +38,7 @@ function schedule(action) {
 }
 return {
 	'luci.tailscale_gateway': {
-		status: { call: protect(() => ({ ...read_json(RUN + '/snapshot.json', { node: { state: 'Unknown' }, warnings: ['状态正在采集，请稍后刷新。'] }), last_apply: read_json(STATE + '/last-apply.json', null), recovery: read_json(STATE + '/pending.json', null)?.state })) },
+		status: { call: protect(status) },
 		config: { call: protect(configuration) },
 		plan: { args: { data: {} }, call: protect((req) => make_plan(req.args.data)) },
 		release_plan: { args: { data: {} }, call: protect((req) => release_plan(req.args.data)) },

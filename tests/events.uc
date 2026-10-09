@@ -1,0 +1,30 @@
+import { decoder, tailscale_filter, line_targets } from '../root/usr/share/tailscale-gateway/events.uc';
+let count = 0;
+function assert(test, name) { if (!test) die('FAIL: ' + name); count++; print('PASS ' + name + '\n'); }
+let messages = [], feed = decoder((v) => push(messages, v));
+let stream = sprintf('%J\n%J\n', { State: 'Running', text: 'escaped " quote and } brace \\' }, { PeersRemoved: [42] });
+for (let i = 0; i < length(stream); i += 3) feed(substr(stream, i, 3));
+assert(length(messages) == 2 && messages[1].PeersRemoved[0] == 42, 'fragmented JSON and quoted braces decode across notification boundaries');
+let rejected = false;
+try { decoder(() => {} )('not JSON\n'); } catch (e) { rejected = true; }
+assert(rejected, 'malformed stream terminates for reconnect instead of being interpreted as policy');
+let filter = tailscale_filter();
+assert(filter({ State: 'Running', Prefs: null }), 'backend transitions wake synchronization');
+assert(filter({ SelfChange: { ID: 1 } }) && filter({ SelfChange: { ID: 1 } }), 'DNS-only SelfChange wakes even if self node fields are unchanged');
+assert(filter({ NetMap: { DNS: {} } }), 'legacy netmap notifications remain compatible');
+assert(!filter({ Engine: { RBytes: 123 }, Version: 'test', State: null }), 'traffic counters do not wake synchronization');
+assert(!filter({ PeerChangedPatch: [{ NodeID: 1, Online: false, LastSeen: 'fixture', Endpoints: ['192.0.2.1:42'], DERPRegion: 1 }] }), 'endpoint and control-connection hints do not wake synchronization');
+assert(filter({ PeerChangedPatch: [{ NodeID: 1, FutureField: 1 }] }), 'unknown patch fields trigger authoritative refresh');
+assert(filter({ PeersChanged: [{ ID: 1, AllowedIPs: ['203.0.113.0/24'], Name: 'fixture' }] }), 'new peer route wakes synchronization');
+assert(!filter({ PeersChanged: [{ ID: 1, AllowedIPs: ['203.0.113.0/24'], Name: 'fixture', Endpoints: ['192.0.2.1:42'], Online: true }] }), 'full-node noise is filtered on older patch promotion');
+assert(filter({ PeersChanged: [{ ID: 1, AllowedIPs: ['198.51.100.0/24'], Name: 'fixture' }] }), 'changed peer prefixes wake synchronization');
+assert(filter({ PeersRemoved: [1] }), 'peer removal wakes withdrawal reconciliation');
+assert(length(line_targets('route', '203.0.113.0/24 dev tailscale0 table 52')) == 2, 'Tailscale route additions are observed');
+assert(length(line_targets('route', 'Deleted 203.0.113.0/24 dev tailscale0 table 52')) == 2, 'Tailscale route withdrawal is observed');
+assert(!length(line_targets('route', 'default via 192.0.2.1 dev eth8 table 203')), 'uplink probe table does not retrigger synchronization');
+assert(length(line_targets('route', '2: eth8 inet 192.0.2.2/24 scope global')) == 3, 'address changes also refresh DNS loop protection');
+assert(length(line_targets('firewall', 'add table inet fw4 {')) == 2, 'firewall reload wakes recovery');
+assert(length(line_targets('firewall', 'add set inet fw4 tsg_remote_active {')) == 2, 'recreated managed set wakes recovery');
+assert(!length(line_targets('firewall', 'add element inet fw4 tsg_remote_active { 203.0.113.0/24 }')) && !length(line_targets('firewall', 'delete element inet fw4 tsg_remote_active { 203.0.113.0/24 }')), 'own set element updates cannot cause a feedback loop');
+assert(!length(line_targets('firewall', 'add table inet unrelated {')), 'unrelated firewall tables do not wake synchronization');
+print(sprintf('RESULT %d event assertions passed\n', count));

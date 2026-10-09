@@ -26,11 +26,19 @@ case "$cmd" in
    *) echo '{}';;
   esac;;
  /sbin/fw4)
-  if [ "$1" = check ] && [ -e "$TSG_ROOT/fail-fw4" ]; then echo 'injected invalid firewall'; exit 1; fi;;
+  if [ "$1" = check ] && [ -e "$TSG_ROOT/fail-fw4" ]; then echo 'injected invalid firewall'; exit 1; fi
+  [ "$1" != reload ] || rm -f "$TSG_ROOT/nft-sets.json";;
  /usr/sbin/nft)
   [ ! -e "$TSG_ROOT/fail-nft" ] || exit 1
-  [ "$1" = -f ] || exit 96
-  cat "$2" >"$TSG_ROOT/last-nft.txt";;
+  if [ "$1" = -j ]; then
+   name=$6
+   entries=$(jsonfilter -i "$TSG_ROOT/nft-sets.json" -e "@.$name" 2>/dev/null || true)
+   printf '{"nftables":[{"set":{"family":"inet","table":"fw4","name":"%s","type":"ipv4_addr","elem":%s}}]}\n' "$name" "${entries:-[]}"
+  else
+   [ "$1" = -f ] || exit 96
+   cat "$2" >"$TSG_ROOT/last-nft.txt"
+   ucode /tmp/tsg-dev/tests/fake-nft.uc "$2"
+  fi;;
  /sbin/ip)
   if [ "$*" = '-4 -j route show table 52' ]; then
     [ ! -e "$TSG_ROOT/fail-routes" ] || exit 1

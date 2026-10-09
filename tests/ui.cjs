@@ -111,5 +111,18 @@ async function test(name, fn) { await fn(); console.log('PASS ' + name); count++
   await p.watchJob('subnet-job'); assert.equal(p.settings.node.hostname, 'draft'); assert.equal(p.dirty, true);
   assert.ok(!JSON.stringify(p.jobOutput).includes('DNS 最近成功'));
  });
+ await test('sixty-second subnet fallback stays fresh and eventually reports a stopped worker', async () => {
+  const p = moduleValue.page('access');
+  Object.assign(p, { runtime: E('div'), writable: true, cfg: { value: { access: {} } }, state: { subnets: {
+   enabled: true, checked_at: Date.now() / 1000 - 65, poll_seconds: 60, state: 'ok', applied: ['203.0.113.0/24'],
+   rows: [{ cidr: '203.0.113.0/24', state: 'ready', peers: ['fixture'], reason: 'ready' }]
+  } } });
+  p.renderRuntime();
+  assert.ok(!JSON.stringify(p.runtime).includes('子网同步状态已过期'));
+  assert.ok(JSON.stringify(p.runtime).includes('已放行'));
+  p.state.subnets.checked_at = Date.now() / 1000 - 180;
+  p.renderRuntime();
+  assert.ok(JSON.stringify(p.runtime).includes('子网同步状态已过期'));
+ });
  console.log(`${count} UI behavior assertions passed`);
 })().catch(e => { console.error(e); process.exitCode = 1; });

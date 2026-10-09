@@ -97,6 +97,8 @@ export function collect() {
 		endpoint: p.Active ? p.CurAddr : '', relay: p.Active && !p.CurAddr ? p.Relay : '', last_seen: p.LastSeen
 	});
 	let cfg = configuration(), manifest = read_json(STATE + '/owned.json', {}), warnings = [];
+	let events = {};
+	for (let source in ['tailscale', 'route', 'firewall']) events[source] = read_json(RUN + '/events-' + source + '.json', {});
 	if (!cfg.managed) push(warnings, '当前为观察模式。预览接管后才会管理网关配置。');
 	if (cfg.managed && !manifest.resources) push(warnings, '托管资源记录丢失；网关工作进程不会启动，请恢复备份后再应用。');
 	if (!status) push(warnings, '无法读取 Tailscale 状态；显示未知状态，请检查守护进程。');
@@ -131,7 +133,7 @@ export function collect() {
 			ips: status?.TailscaleIPs || [], health: status?.Health || [],
 			version: status?.Version || '', exit_node: cfg.value.node.advertise_exit },
 		peers, uplink, dns: { ...dnsStatus, mode: cfg.value.dns.mode, rules: dnsOwned.server || [], instance: dnsOwned.section },
-		interfaces: network?.interface || [], services: running, warnings, drift,
+		interfaces: network?.interface || [], services: running, events, warnings, drift,
 		capabilities: { fw4: fs.access('/sbin/fw4', 'x'), dnsmasq: fs.access('/usr/sbin/dnsmasq', 'x'),
 			dns_json: cfg.value.dns.mode != 'sync' || dnsStatus.state != 'error' },
 		tail_routes: command_json(['/sbin/ip', '-4', '-j', 'route', 'show', 'table', '52'], null)

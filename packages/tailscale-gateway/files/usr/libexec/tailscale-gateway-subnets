@@ -5,16 +5,12 @@ mkdir -p "$RUN"
 chmod 700 "$RUN"
 exec 8>"$RUN/subnets.lock"
 flock -n 8 || exit 0
-sleeper='' stop=0
-trap 'stop=1; [ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' TERM INT
-trap '[ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' USR1 HUP
-while [ "$stop" = 0 ]; do
+. /usr/share/tailscale-gateway/worker.sh
+sync_once() {
     (
         exec 9>"$RUN/apply.lock"
-        flock -n 9 || exit 0
+        flock -n 9 || exit 75
         ucode /usr/share/tailscale-gateway/main.uc subnet-sync >"$RUN/subnet-output.json" 2>"$RUN/subnet-error.log"
     )
-    [ "$stop" = 0 ] || break
-    sleep 5 & sleeper=$!
-    wait "$sleeper" 2>/dev/null; sleeper=''
-done
+}
+tsg_worker 60 5 sync_once

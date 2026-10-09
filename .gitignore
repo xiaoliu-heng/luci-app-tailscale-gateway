@@ -27,6 +27,9 @@
 !/tests/uplink.py
 !/tests/ui.cjs
 !/tests/acl.py
+!/tests/events.uc
+!/tests/worker.py
+!/tests/fake-nft.uc
 
 **/.DS_Store
 **/__pycache__/

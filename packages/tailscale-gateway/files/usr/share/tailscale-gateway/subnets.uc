@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { RUN, STATE, read_json, save_json, run, cidr, overlaps, equal, id, section } from './common.uc';
+import { RUN, STATE, read_json, save_json, run, command_json, cidr, overlaps, equal, id, section } from './common.uc';
 
 export const GUARD = STATE + '/subnet-guard.nft';
 export const KNOWN = STATE + '/subnet-known.list';
@@ -78,22 +78,62 @@ export function discover_subnets(cfg, snap, known) {
 	return { active, known: remembered, rows };
 }
 
+function ip_number(address) {
+	let bytes = iptoarr(address);
+	if (length(bytes) != 4) die('Invalid IPv4 set element');
+	return bytes[0] * 16777216 + bytes[1] * 65536 + bytes[2] * 256 + bytes[3];
+}
+
+function ranges(elements) {
+	let result = [];
+	for (let element in elements) {
+		if (element?.elem) element = element.elem.val;
+		if (element?.range) { push(result, [ip_number(element.range[0]), ip_number(element.range[1])]); continue; }
+		if (element?.prefix) element = element.prefix.addr + '/' + element.prefix.len;
+		if (type(element) != 'string') die('Unsupported nft set element');
+		let p = split(cidr(index(element, '/') < 0 ? element + '/32' : element, 32), '/');
+		let first = ip_number(p[0]);
+		push(result, [first, first + (1 << (32 - int(p[1]))) - 1]);
+	}
+	sort(result, (a, b) => a[0] - b[0]);
+	let merged = [];
+	for (let r in result) {
+		let last = merged[length(merged) - 1];
+		if (last && r[0] <= last[1] + 1) last[1] = max(last[1], r[1]);
+		else push(merged, r);
+	}
+	return merged;
+}
+
+export function set_matches(document, name, wanted) {
+	try {
+		let set = filter(document?.nftables || [], (x) => x.set?.family == 'inet' && x.set.table == 'fw4' && x.set.name == name)[0]?.set;
+		// fw4 auto-merges overlapping and adjacent prefixes. Compare covered
+		// ranges rather than JSON spelling or cached results of a previous run.
+		return set?.type == 'ipv4_addr' && equal(ranges(set.elem || []), ranges(wanted));
+	} catch (e) { return false; }
+}
+
 function update_sets(active, known) {
+	let applied = command_json(['/usr/sbin/nft', '-j', 'list', 'set', 'inet', 'fw4', 'tsg_remote_active'], null);
+	let remembered = command_json(['/usr/sbin/nft', '-j', 'list', 'set', 'inet', 'fw4', 'tsg_remote_known'], null);
+	if (set_matches(applied, 'tsg_remote_active', active) && set_matches(remembered, 'tsg_remote_known', known)) return false;
 	let text = 'flush set inet fw4 tsg_remote_active\nflush set inet fw4 tsg_remote_known\n';
 	if (length(known)) text += 'add element inet fw4 tsg_remote_known { ' + join(', ', known) + ' }\n';
 	if (length(active)) text += 'add element inet fw4 tsg_remote_active { ' + join(', ', active) + ' }\n';
 	let file = RUN + '/subnet-update.nft';
 	if (fs.writefile(file, text) == null) die('Cannot stage subnet firewall update');
 	fs.chmod(file, 0600);
-	// nft applies a batch atomically; fw4 reload leaves the active set empty
-	// until the next sync. Reapply every tick to heal external fw4 reloads.
+	// nft applies the changed sets atomically. Comparing the actual kernel
+	// state also repairs reloads or drift even when desired prefixes match.
 	let result = run(['/usr/sbin/nft', '-f', file]);
 	fs.unlink(file);
 	if (result.code) die('子网防火墙更新失败：' + substr(result.output, 0, 400));
+	return true;
 }
 
 export function sync_subnets(cfg, snap) {
-	let old = known_subnets(), result, error = null;
+	let old = known_subnets(), result, error = null, changed = false;
 	try {
 		if (!snap.network_ok) die('无法读取接口状态，暂停远端子网放行。');
 		result = discover_subnets(cfg, snap, old);
@@ -108,14 +148,14 @@ export function sync_subnets(cfg, snap) {
 			fs.chmod(KNOWN + '.new', 0600);
 			if (!fs.rename(KNOWN + '.new', KNOWN)) die('Cannot replace subnet history');
 		}
-		update_sets(result.active, result.known);
+		changed = update_sets(result.active, result.known);
 	} catch (e) {
 		error = e.message || '' + e;
 		// Keep the last known destinations protected when input is missing.
 		// Never interpret a failed read as an empty Tailnet.
-		try { update_sets([], old); } catch (closed) { error += '; ' + closed.message; }
+		try { changed = update_sets([], old); } catch (closed) { error += '; ' + closed.message; }
 	}
-	let status = { checked_at: time(), state: error ? 'error' : 'ok', error,
+	let status = { checked_at: time(), poll_seconds: 60, changed, state: error ? 'error' : 'ok', error,
 		active: error ? [] : result.active, rows: result?.rows || [], known: error ? old : result.known };
 	save_json(RUN + '/subnets.json', status);
 	return status;
