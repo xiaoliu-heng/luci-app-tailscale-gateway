@@ -6,7 +6,7 @@ RUN=/var/run/tailscale-gateway/dns
 COMPILER=/usr/share/tailscale-gateway/dns-render.uc
 . /lib/functions.sh
 config_load tailscale_gateway
-config_get POLL dns interval 60
+config_get POLL dns interval 300
 config_get RETRY dns retry 5
 config_get INSTANCE dns instance ''
 INSTANCE=${TSG_DNS_INSTANCE:-$INSTANCE}

@@ -13,4 +13,4 @@ sync_once() {
         ucode /usr/share/tailscale-gateway/main.uc subnet-sync >"$RUN/subnet-output.json" 2>"$RUN/subnet-error.log"
     )
 }
-tsg_worker 60 5 sync_once
+tsg_worker 300 5 sync_once

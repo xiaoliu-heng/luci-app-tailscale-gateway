@@ -150,7 +150,7 @@ function record(path, state, reason) {
 	let next = {
 		state, reason, checked_at: now,
 		last_success: old.last_success, last_change: old.last_change,
-		poll_seconds: int(cursor().get('tailscale_gateway', 'dns', 'interval') || '60'), retry_seconds: int(cursor().get('tailscale_gateway', 'dns', 'retry') || '5')
+		poll_seconds: int(cursor().get('tailscale_gateway', 'dns', 'interval') || '300'), retry_seconds: int(cursor().get('tailscale_gateway', 'dns', 'retry') || '5')
 	};
 	if (state == 'unchanged' || state == 'updated') next.last_success = now;
 	if (state == 'updated') next.last_change = now;

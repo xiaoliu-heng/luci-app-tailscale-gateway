@@ -11,7 +11,7 @@ case "$1" in
         collect_once() {
             ucode /usr/share/tailscale-gateway/main.uc snapshot >"$RUN/collector-output.json" 2>"$RUN/collector-error.log"
         }
-        tsg_worker 60 5 collect_once
+        tsg_worker 300 5 collect_once
         ;;
     start-job)
         case "$2" in ''|*[!a-f0-9]*) exit 2;; esac

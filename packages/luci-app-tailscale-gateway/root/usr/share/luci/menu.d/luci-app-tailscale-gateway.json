@@ -16,7 +16,7 @@
     "order": 10,
     "action": {
       "type": "view",
-      "path": "tailscale-gateway/v0_2_1_r1/overview"
+      "path": "tailscale-gateway/v0_2_2_r1/overview"
     }
   },
   "admin/services/tailscale-gateway/node": {
@@ -24,7 +24,7 @@
     "order": 20,
     "action": {
       "type": "view",
-      "path": "tailscale-gateway/v0_2_1_r1/node"
+      "path": "tailscale-gateway/v0_2_2_r1/node"
     }
   },
   "admin/services/tailscale-gateway/uplink": {
@@ -32,7 +32,7 @@
     "order": 30,
     "action": {
       "type": "view",
-      "path": "tailscale-gateway/v0_2_1_r1/uplink"
+      "path": "tailscale-gateway/v0_2_2_r1/uplink"
     }
   },
   "admin/services/tailscale-gateway/access": {
@@ -40,7 +40,7 @@
     "order": 40,
     "action": {
       "type": "view",
-      "path": "tailscale-gateway/v0_2_1_r1/access"
+      "path": "tailscale-gateway/v0_2_2_r1/access"
     }
   },
   "admin/services/tailscale-gateway/dns": {
@@ -48,7 +48,7 @@
     "order": 50,
     "action": {
       "type": "view",
-      "path": "tailscale-gateway/v0_2_1_r1/dns"
+      "path": "tailscale-gateway/v0_2_2_r1/dns"
     }
   },
   "admin/services/tailscale-gateway/diagnostics": {
@@ -56,7 +56,7 @@
     "order": 60,
     "action": {
       "type": "view",
-      "path": "tailscale-gateway/v0_2_1_r1/diagnostics"
+      "path": "tailscale-gateway/v0_2_2_r1/diagnostics"
     }
   }
 }

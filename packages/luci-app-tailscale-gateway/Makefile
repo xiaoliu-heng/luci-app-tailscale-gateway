@@ -3,7 +3,7 @@ include $(TOPDIR)/rules.mk
 LUCI_TITLE:=Tailscale Gateway
 LUCI_DEPENDS:=+tailscale-gateway +luci-base +rpcd-mod-ucode
 LUCI_PKGARCH:=all
-PKG_VERSION:=0.2.1
+PKG_VERSION:=0.2.2
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 

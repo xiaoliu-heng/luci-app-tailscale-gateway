@@ -10,7 +10,7 @@ import gzip, hashlib, io, json, os, tarfile, time
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT/'dist'; DIST.mkdir(exist_ok=True)
-VERSION = '0.2.1-r1'
+VERSION = '0.2.2-r1'
 EPOCH = int(os.environ.get('SOURCE_DATE_EPOCH', '1791417600'))
 
 def archive(files, *, end=True, checksums=False):

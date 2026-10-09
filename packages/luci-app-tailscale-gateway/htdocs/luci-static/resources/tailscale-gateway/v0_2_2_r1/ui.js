@@ -249,7 +249,7 @@ return baseclass.extend({
      sections.push(section(_('系统上联'), [this.interfaceTable(), E('a', { href: L.url('admin/network/network') }, [_('在网络设置中调整普通上网优先级')])]));
     }
     if (kind === 'access') {
-     const remote = s.subnets || {}, stale = Date.now() / 1000 - (remote.checked_at || 0) > (remote.poll_seconds || 60) * 2 + 30;
+     const remote = s.subnets || {}, stale = Date.now() / 1000 - (remote.checked_at || 0) > (remote.poll_seconds || 300) * 2 + 30;
      const names = { ready: _('已放行'), unavailable: _('不可用'), excluded: _('已排除'), disabled: _('未启用') };
      const rows = (remote.rows || []).map(r => {
       let label = names[r.state] || _('待同步'), reason = r.reason;
@@ -263,7 +263,7 @@ return baseclass.extend({
       remote.enabled && remote.error ? notice(remote.error, true) : null,
       remote.enabled && stale ? notice(_('子网同步状态已过期，请检查后台服务或立即同步。'), true) : null,
       rows.length ? table([_('网段'), _('状态'), _('子网路由器'), _('说明')], rows) : E('p', {}, [_('尚未发现远端 IPv4 子网。请在远端节点发布路由，并在 Tailscale 控制台批准。')]),
-      E('p', { 'class': 'tsg-help' }, [_('路由变化时同步，每 60 秒兜底核对；未变化时不重写规则。路由撤回后保留出口保护，防止已识别网段转走其他上联；排除网段或关闭功能会清除对应保护。已放行表示规则就绪，连通性仍受远端服务和 ACL 限制。')]),
+      E('p', { 'class': 'tsg-help' }, [_('路由变化时同步，每 300 秒兜底核对；未变化时不重写规则。路由撤回后保留出口保护，防止已识别网段转走其他上联；排除网段或关闭功能会清除对应保护。已放行表示规则就绪，连通性仍受远端服务和 ACL 限制。')]),
       button(_('立即同步子网'), () => this.startJob('subnet_sync', {}), false, !this.writable || !remote.enabled || this.busy)
      ]));
     }

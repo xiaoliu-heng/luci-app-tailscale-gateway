@@ -155,7 +155,7 @@ export function sync_subnets(cfg, snap) {
 		// Never interpret a failed read as an empty Tailnet.
 		try { changed = update_sets([], old); } catch (closed) { error += '; ' + closed.message; }
 	}
-	let status = { checked_at: time(), poll_seconds: 60, changed, state: error ? 'error' : 'ok', error,
+	let status = { checked_at: time(), poll_seconds: 300, changed, state: error ? 'error' : 'ok', error,
 		active: error ? [] : result.active, rows: result?.rows || [], known: error ? old : result.known };
 	save_json(RUN + '/subnets.json', status);
 	return status;

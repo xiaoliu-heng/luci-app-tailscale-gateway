@@ -8,8 +8,8 @@ start_service() {
     config_load tailscale_gateway
     config_get_bool managed main managed 0
     procd_open_instance collector
-    procd_set_param command /usr/libexec/tailscale-gateway collect 0.2.1-r1
-    procd_set_param data "worker_version=0.2.1-r1"
+    procd_set_param command /usr/libexec/tailscale-gateway collect 0.2.2-r1
+    procd_set_param data "worker_version=0.2.2-r1"
     procd_set_param respawn 60 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1
@@ -22,8 +22,8 @@ start_service() {
         for source in tailscale route firewall; do
             [ "$source:$enabled" != firewall:0 ] || continue
             procd_open_instance "events-$source"
-            procd_set_param command /usr/libexec/tailscale-gateway-events "$source" 0.2.1-r1
-            procd_set_param data "worker_version=0.2.1-r1"
+            procd_set_param command /usr/libexec/tailscale-gateway-events "$source" 0.2.2-r1
+            procd_set_param data "worker_version=0.2.2-r1"
             procd_set_param respawn 60 5 0
             procd_set_param term_timeout 5
             procd_close_instance
@@ -48,8 +48,8 @@ start_service() {
     if [ "$enabled" = 1 ]; then
         fingerprint=$(uci -q show tailscale_gateway.access | sha256sum | cut -d' ' -f1)
         procd_open_instance subnets
-        procd_set_param command /usr/libexec/tailscale-gateway-subnets "$fingerprint" 0.2.1-r1
-        procd_set_param data "configuration=$fingerprint" "worker_version=0.2.1-r1"
+        procd_set_param command /usr/libexec/tailscale-gateway-subnets "$fingerprint" 0.2.2-r1
+        procd_set_param data "configuration=$fingerprint" "worker_version=0.2.2-r1"
         procd_set_param respawn 60 5 0
         procd_set_param term_timeout 45
         procd_set_param stderr 1
@@ -63,8 +63,8 @@ start_service() {
         fi
         fingerprint=$(uci -q show tailscale_gateway.dns | sha256sum | cut -d' ' -f1)
         procd_open_instance dns
-        procd_set_param command /usr/libexec/tailscale-gateway-dns run "$fingerprint" 0.2.1-r1
-        procd_set_param data "configuration=$fingerprint" "worker_version=0.2.1-r1"
+        procd_set_param command /usr/libexec/tailscale-gateway-dns run "$fingerprint" 0.2.2-r1
+        procd_set_param data "configuration=$fingerprint" "worker_version=0.2.2-r1"
         procd_set_param respawn 60 5 0
         procd_set_param term_timeout 45
         procd_set_param stderr 1

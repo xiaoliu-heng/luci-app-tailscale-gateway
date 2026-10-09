@@ -8,7 +8,7 @@ let refresh_signal = usr1_signal();
 
 function status() {
 	let snap = read_json(RUN + '/snapshot.json', { node: { state: 'Unknown' }, warnings: ['状态正在采集，请稍后刷新。'] });
-	// Keep the idle collector at 60s; an open LuCI page requests fresh
+	// Keep the idle collector at 300s; an open LuCI page requests fresh
 	// status at most once per 15s. Return cached data without blocking RPC.
 	if (time() - (snap.checked_at || 0) >= 15 && time() - read_json(RUN + '/refresh-request.json', 0) >= 10 && refresh_signal) {
 		let bus = connect();

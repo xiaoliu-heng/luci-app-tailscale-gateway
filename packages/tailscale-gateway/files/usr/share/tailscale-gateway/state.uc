@@ -25,7 +25,7 @@ export function configuration() {
 		access: { lan_enabled: false, remote_enabled: false, remote_exclude: [], router_access: false, subnet_access: false, interface: 'tailscale',
 			device: 'tailscale0', zone: 'tailscale', sources: ['lan'], internet_zones: ['wan'],
 			targets: ['100.64.0.0/10'], local_routes: [] },
-		dns: { mode: 'off', instance: '', interval: 60, retry: 5 }
+		dns: { mode: 'off', instance: '', interval: 300, retry: 5 }
 	};
 	if (managed) {
 		for (let group in ['uplink', 'access', 'dns']) for (let k, def in value[group]) {
