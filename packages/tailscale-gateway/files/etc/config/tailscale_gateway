@@ -18,6 +18,7 @@ config uplink 'uplink'
 
 config access 'access'
 	option lan_enabled '0'
+	option remote_enabled '0'
 	option router_access '0'
 	option subnet_access '0'
 	option interface 'tailscale'

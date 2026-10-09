@@ -2,6 +2,6 @@
   "luci-app-tailscale-gateway": {
     "description": "Inspect Tailscale gateway state and manage scoped gateway policies",
     "read": { "ubus": { "luci.tailscale_gateway": ["status", "config", "plan", "release_plan", "logs"] } },
-    "write": { "ubus": { "luci.tailscale_gateway": ["apply", "release", "node_action", "dns_sync", "diagnose", "rollback", "recover", "job_status"] } }
+    "write": { "ubus": { "luci.tailscale_gateway": ["apply", "release", "node_action", "dns_sync", "subnet_sync", "diagnose", "rollback", "recover", "job_status"] } }
   }
 }

@@ -94,5 +94,22 @@ async function test(name, fn) { await fn(); console.log('PASS ' + name); count++
   const pending = p.previewChanges(); edit(p, 'changed'); d.reject(new Error('old failure')); await pending;
   assert.equal(p.preview.children.length, 0);
  });
- console.log(`${count} UI concurrency assertions passed`);
+ await test('enabling remote subnet forwarding includes native route acceptance in the same draft', async () => {
+  const p = page(); p.settings.access.remote_enabled = false; p.settings.node.accept_routes = false;
+  p.field('node', 'accept_routes', 'Accept', 'bool'); p.field('access', 'remote_enabled', 'Remote', 'bool');
+  const remote = p.fields['access.remote_enabled']; remote.checked = true; remote.listeners.change();
+  assert.equal(p.settings.node.accept_routes, true); assert.equal(p.fields['node.accept_routes'].checked, true); assert.equal(p.dirty, true);
+ });
+ await test('turning off native route acceptance also disables dependent LAN forwarding', async () => {
+  const p = page(); p.settings.access.remote_enabled = true; p.settings.node.accept_routes = true;
+  p.field('node', 'accept_routes', 'Accept', 'bool'); p.field('access', 'remote_enabled', 'Remote', 'bool');
+  const accept = p.fields['node.accept_routes']; accept.checked = false; accept.listeners.change();
+  assert.equal(p.settings.access.remote_enabled, false); assert.equal(p.fields['access.remote_enabled'].checked, false);
+ });
+ await test('subnet sync completion preserves an unapplied draft and does not display a DNS timestamp', async () => {
+  const p = page(); edit(p, 'draft'); handlers.job_status = async () => ok({ state: 'done', action: 'subnet_sync', result: { state: { checked_at: 1 } } });
+  await p.watchJob('subnet-job'); assert.equal(p.settings.node.hostname, 'draft'); assert.equal(p.dirty, true);
+  assert.ok(!JSON.stringify(p.jobOutput).includes('DNS 最近成功'));
+ });
+ console.log(`${count} UI behavior assertions passed`);
 })().catch(e => { console.error(e); process.exitCode = 1; });

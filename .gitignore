@@ -20,6 +20,9 @@
 !/tests/test-runner.sh
 !/tests/fake-set.uc
 !/tests/validation.uc
+!/tests/subnets.uc
+!/tests/atomic.uc
+!/tests/firewall.py
 !/tests/dns.py
 !/tests/uplink.py
 !/tests/ui.cjs

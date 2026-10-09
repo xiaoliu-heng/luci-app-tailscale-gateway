@@ -23,7 +23,7 @@ case "$1" in
         ;;
     job)
         exec 9>"$RUN/apply.lock"
-        flock -n 9 || exit 1
+        timeout 20 flock 9 || exit 1
         exec ucode /usr/share/tailscale-gateway/main.uc job "$2"
         ;;
     *) exec ucode /usr/share/tailscale-gateway/main.uc "$@";;

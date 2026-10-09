@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { discover_subnets, known_subnets } from './subnets.uc';
 import { ROOT, RUN, STATE, run, command_json, read_json, save_json, sections, section, array, config_cursor, revision, cidr, overlaps } from './common.uc';
 
 export function native_preferences(p) {
@@ -21,7 +22,7 @@ export function configuration() {
 		uplink: { enabled: false, preferred: '', preferred6: '', table: 203, interval: 10, fail_count: 3,
 			recover_count: 2, restart_on_change: true, probes: ['223.5.5.5', '119.29.29.29'],
 			probes6: ['2400:3200::1', '2606:4700:4700::1111'] },
-		access: { lan_enabled: false, router_access: false, subnet_access: false, interface: 'tailscale',
+		access: { lan_enabled: false, remote_enabled: false, remote_exclude: [], router_access: false, subnet_access: false, interface: 'tailscale',
 			device: 'tailscale0', zone: 'tailscale', sources: ['lan'], internet_zones: ['wan'],
 			targets: ['100.64.0.0/10'], local_routes: [] },
 		dns: { mode: 'off', instance: '', interval: 60, retry: 5 }
@@ -81,7 +82,7 @@ export function collect() {
 	let ts = fs.access('/usr/sbin/tailscale', 'x') ? '/usr/sbin/tailscale' : '/usr/bin/tailscale';
 	let prefs = command_json([ts, 'debug', 'prefs'], null);
 	if (prefs && type(prefs.RouteAll) == 'bool') save_json(RUN + '/native.json', native_preferences(prefs));
-	let network = command_json(['/bin/ubus', 'call', 'network.interface', 'dump'], { interface: [] });
+	let network = command_json(['/bin/ubus', 'call', 'network.interface', 'dump'], null);
 	let services = command_json(['/bin/ubus', 'call', 'service', 'list'], {}), running = {};
 	for (let name in ['tailscale', 'tailscale-uplink', 'tailscale-dns-sync', 'tailscale-gateway', 'dnsmasq']) {
 		let inst = services[name]?.instances || {};
@@ -90,6 +91,7 @@ export function collect() {
 	let peers = [];
 	for (let key, p in status?.Peer || {}) push(peers, {
 		id: p.ID, hostname: p.HostName, dns_name: p.DNSName, ips: p.TailscaleIPs || [],
+		allowed_routes: p.AllowedIPs || [], primary_routes: p.PrimaryRoutes || [], expired: p.Expired == true,
 		online: p.Online == true, active: p.Active == true, rx: p.RxBytes, tx: p.TxBytes,
 		path: !p.Active ? 'idle' : p.CurAddr ? (index(p.CurAddr, '[') == 0 ? 'direct6' : 'direct4') : p.Relay ? 'relay' : 'unknown',
 		endpoint: p.Active ? p.CurAddr : '', relay: p.Active && !p.CurAddr ? p.Relay : '', last_seen: p.LastSeen
@@ -101,7 +103,7 @@ export function collect() {
 	if (cfg.native.exit_node) push(warnings, '正在使用另一个 Exit Node；首版不接管这种路由模式。');
 	for (let route in cfg.value.node.advertise_routes) {
 		let found = false;
-		for (let net in network.interface || []) for (let addr in net['ipv4-address'] || [])
+		for (let net in network?.interface || []) for (let addr in net['ipv4-address'] || [])
 			if (overlaps(route, addr.address + '/' + addr.mask)) found = true;
 		if (!found) push(warnings, '发布网段 ' + route + ' 未匹配当前直连 IPv4 网络，请核对用途。');
 	}
@@ -123,17 +125,24 @@ export function collect() {
 		uplink.ipv6 = uplink.ipv6 == 'wan' ? 'system' : uplink.ipv6 == 'blocked' ? 'blocked' : cfg.value.uplink.preferred6;
 	}
 	let snap = {
-		checked_at: time(), managed: cfg.managed, native_ok: prefs != null, kernel_tun: prefs?.TUN != false,
+		checked_at: time(), managed: cfg.managed, status_ok: status != null, network_ok: network != null, native_ok: prefs != null, kernel_tun: prefs?.TUN != false,
 		node: { state: status?.BackendState || 'Unknown', online: status?.Self?.Online == true,
 			hostname: status?.Self?.HostName || cfg.value.node.hostname, dns_name: status?.Self?.DNSName || '',
 			ips: status?.TailscaleIPs || [], health: status?.Health || [],
 			version: status?.Version || '', exit_node: cfg.value.node.advertise_exit },
 		peers, uplink, dns: { ...dnsStatus, mode: cfg.value.dns.mode, rules: dnsOwned.server || [], instance: dnsOwned.section },
-		interfaces: network.interface || [], services: running, warnings, drift,
+		interfaces: network?.interface || [], services: running, warnings, drift,
 		capabilities: { fw4: fs.access('/sbin/fw4', 'x'), dnsmasq: fs.access('/usr/sbin/dnsmasq', 'x'),
 			dns_json: cfg.value.dns.mode != 'sync' || dnsStatus.state != 'error' },
-		tail_routes: command_json(['/sbin/ip', '-4', '-j', 'route', 'show', 'table', '52'], [])
+		tail_routes: command_json(['/sbin/ip', '-4', '-j', 'route', 'show', 'table', '52'], null)
 	};
+	snap.main_routes = command_json(['/sbin/ip', '-4', '-j', 'route', 'show', 'table', 'main'], null);
+	snap.routes_ok = snap.tail_routes != null && snap.main_routes != null;
+	snap.main_routes ??= [];
+	snap.tail_routes ??= [];
+	let subnets = read_json(RUN + '/subnets.json', {});
+	try { snap.subnets = { ...subnets, enabled: cfg.managed && cfg.value.access.remote_enabled, ...discover_subnets(cfg.value, snap, known_subnets()), applied: subnets.active || [] }; }
+	catch (e) { snap.subnets = { ...subnets, state: 'error', error: e.message, rows: [] }; }
 	let devices = command_json(['/sbin/ip', '-j', 'address', 'show'], []);
 	snap.tun_devices = map(filter(devices, (d) => length(filter(d.addr_info || [], (a) => index(status?.TailscaleIPs || [], a.local) >= 0)) > 0), (d) => d.ifname);
 	save_json(RUN + '/snapshot.json', snap);

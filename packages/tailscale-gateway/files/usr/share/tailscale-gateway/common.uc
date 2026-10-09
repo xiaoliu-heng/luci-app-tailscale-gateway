@@ -6,6 +6,7 @@ export const ROOT = getenv('TSG_ROOT') || '';
 export const RUN = ROOT + '/var/run/tailscale-gateway';
 export const STATE = ROOT + '/etc/tailscale-gateway';
 export const SHARE = ROOT + '/usr/share/tailscale-gateway';
+export function uuid() { return substr(sha256(fs.readfile('/proc/sys/kernel/random/uuid') || die('No random source')), 0, 24); }
 export function ensure() {
 	system(['/bin/mkdir', '-p', RUN, STATE, ROOT + '/tmp/tsg-read']);
 	if ((fs.stat(RUN)?.mode & 0777) != 0700) fs.chmod(RUN, 0700);
@@ -17,9 +18,12 @@ export function read_json(path, fallback) {
 	try { return json(s); } catch (e) { return fallback; }
 }
 export function save_json(path, value) {
-	if (fs.writefile(path + '.new', sprintf('%J\n', value)) == null) die('Cannot write ' + path);
-	fs.chmod(path + '.new', 0600);
-	if (!fs.rename(path + '.new', path)) die('Cannot replace ' + path);
+	// Collectors, manual actions and subnet sync can overlap. Each writer
+	// needs its own staging file even though the final rename is atomic.
+	let temporary = path + '.' + uuid() + '.new';
+	if (fs.writefile(temporary, sprintf('%J\n', value)) == null) die('Cannot write ' + path);
+	fs.chmod(temporary, 0600);
+	if (!fs.rename(temporary, path)) { fs.unlink(temporary); die('Cannot replace ' + path); }
 }
 export function run(argv, seconds) {
 	ensure();
@@ -64,13 +68,13 @@ export function sections(pkg, typ) {
 	return result;
 }
 export function section(pkg, name) { return clean(config_cursor().get_all(pkg, name)); }
-export function uuid() { return substr(sha256(fs.readfile('/proc/sys/kernel/random/uuid') || die('No random source')), 0, 24); }
 export function revision() {
 	let s = '';
 	for (let p in ['network', 'firewall', 'dhcp', 'tailscale_gateway', 'tailscale_uplink', 'tailscale'])
 		s += p + '\n' + (fs.readfile(ROOT + '/etc/config/' + p) || '');
 	s += stable(read_json(RUN + '/native.json', {}));
 	s += fs.readfile(STATE + '/owned.json') || '';
+	s += fs.readfile(STATE + '/subnet-guard.nft') || '';
 	return sha256(s);
 }
 export function pending_edits() {

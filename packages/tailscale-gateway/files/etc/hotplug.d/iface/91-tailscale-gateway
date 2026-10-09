@@ -4,6 +4,7 @@ case "$ACTION" in ifup|ifupdate|ifdown) ;; *) exit 0;; esac
 . /lib/functions.sh
 . /lib/functions/procd.sh
 procd_send_signal tailscale-gateway collector USR1 >/dev/null 2>&1
+procd_send_signal tailscale-gateway subnets USR1 >/dev/null 2>&1
 case "$INTERFACE" in
     "$(uci -q get tailscale_gateway.uplink.preferred)"|"$(uci -q get tailscale_gateway.uplink.preferred6)")
         procd_send_signal tailscale-gateway uplink USR1 >/dev/null 2>&1;;

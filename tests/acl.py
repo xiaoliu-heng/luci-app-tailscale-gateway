@@ -25,6 +25,7 @@ try:
     ubus('grant',{'ubus_rpc_session':session,'scope':'ubus','objects':objects})
     assert rpc(session,'status',{})['result'][0]==0
     assert rpc(session,'apply',{'data':{}})['error']['code']==-32002
+    assert rpc(session,'subnet_sync',{'data':{}})['error']['code']==-32002
     assert rpc('0'*32,'apply',{'data':{}})['error']['code']==-32002
     print('PASS read-only session can inspect status but cannot apply; anonymous apply denied')
 finally:

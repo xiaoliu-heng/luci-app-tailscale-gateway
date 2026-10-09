@@ -1,5 +1,5 @@
 'use strict';
 'require view';
-'require tailscale-gateway.v0_1_0_r4.ui as gateway';
+'require tailscale-gateway.v0_2_0_r2.ui as gateway';
 
 return view.extend(gateway.page('overview'));

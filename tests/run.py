@@ -50,4 +50,14 @@ with tarfile.open(fileobj=buf,mode='w') as t:
   b=content.encode(); info=tarfile.TarInfo('fixture/'+name); info.size=len(b); info.mode=0o755 if name.startswith('usr/libexec/') else 0o600;t.addfile(info,io.BytesIO(b))
 subprocess.run(['ssh',host,'rm -rf /tmp/tsg-dev/fixture && tar -xf - -C /tmp/tsg-dev && mkdir -p /tmp/tsg-dev/fixture/tmp/.uci /tmp/tsg-dev/fixture/var/run/tailscale-gateway /tmp/tsg-dev/fixture/etc/tailscale-gateway'],input=buf.getvalue(),check=True)
 r=subprocess.run(['ssh',host,'TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/validation.uc'],capture_output=True,text=True)
-print(r.stdout);print(r.stderr,end='');sys.exit(r.returncode)
+print(r.stdout);print(r.stderr,end='')
+if r.returncode: sys.exit(r.returncode)
+r=subprocess.run(['ssh',host,'TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/subnets.uc'],capture_output=True,text=True)
+print(r.stdout);print(r.stderr,end='')
+if r.returncode: sys.exit(r.returncode)
+command='TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/atomic.uc '
+writers=[subprocess.Popen(['ssh',host,command+name],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for name in ['collector','subnets']]
+for writer in writers:
+ output,error=writer.communicate()
+ if writer.returncode: sys.exit(error or output)
+print('PASS two concurrent writers publish 200 complete JSON snapshots without staging collisions')

@@ -10,7 +10,7 @@ name = 'tailscale-gateway-' + VERSION
 files = sorted(p for p in (ROOT/'packages').rglob('*') if p.is_file())
 files += [ROOT/p for p in ['README.md', 'LICENSE', 'SECURITY.md', '.gitignore', 'docs/VALIDATION.md',
  'scripts/check.py', 'scripts/package.py', 'scripts/source-package.py', 'scripts/deploy.py',
- 'tests/run.py', 'tests/test-runner.sh', 'tests/fake-set.uc', 'tests/validation.uc',
+ 'tests/run.py', 'tests/test-runner.sh', 'tests/fake-set.uc', 'tests/validation.uc', 'tests/subnets.uc', 'tests/atomic.uc', 'tests/firewall.py',
  'tests/dns.py', 'tests/uplink.py', 'tests/ui.cjs', 'tests/acl.py']]
 buf = io.BytesIO()
 with tarfile.open(fileobj=buf, mode='w', format=tarfile.PAX_FORMAT) as archive:

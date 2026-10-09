@@ -1,0 +1,20 @@
+#!/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+RUN=/var/run/tailscale-gateway
+mkdir -p "$RUN"
+chmod 700 "$RUN"
+exec 8>"$RUN/subnets.lock"
+flock -n 8 || exit 0
+sleeper='' stop=0
+trap 'stop=1; [ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' TERM INT
+trap '[ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null' USR1 HUP
+while [ "$stop" = 0 ]; do
+    (
+        exec 9>"$RUN/apply.lock"
+        flock -n 9 || exit 0
+        ucode /usr/share/tailscale-gateway/main.uc subnet-sync >"$RUN/subnet-output.json" 2>"$RUN/subnet-error.log"
+    )
+    [ "$stop" = 0 ] || break
+    sleep 5 & sleeper=$!
+    wait "$sleeper" 2>/dev/null; sleeper=''
+done

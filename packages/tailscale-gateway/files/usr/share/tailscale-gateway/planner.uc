@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { GUARD, KNOWN, subnet_guard } from './subnets.uc';
 import { ROOT, RUN, STATE, read_json, section, sections, array, equal, stable, id, integer, cidr, overlaps, revision, pending_edits, command_json } from './common.uc';
 import { configuration, source_networks } from './state.uc';
 
@@ -30,6 +31,10 @@ export function validate(raw, env) {
 	if (n.hostname && !match(n.hostname, /^[a-zA-Z0-9][a-zA-Z0-9.-]{0,62}$/)) die('Invalid hostname');
 	n.advertise_routes = map(n.advertise_routes, (x) => cidr(x));
 	a.local_routes = map(a.local_routes, (x) => cidr(x));
+	a.remote_exclude = map(a.remote_exclude, (x) => cidr(x, 32));
+	if (a.remote_enabled && !n.accept_routes) die('LAN 访问远端子网需要同时启用“接受子网路由”。');
+	if (a.remote_enabled && !length(a.sources)) die('请选择允许访问远端子网的 LAN 来源。');
+	if (a.remote_enabled && length(filter(sections('firewall', 'defaults'), (s) => s.options.flow_offloading == '1'))) die('远端子网出口保护需要先关闭防火墙 flow offloading。');
 	a.targets = map(a.targets, (x) => cidr(x, 32));
 	for (let target in a.targets) if (!overlaps(target, '100.64.0.0/10') || int(split(target, '/')[1]) < 10) die('Tailnet targets must be within 100.64.0.0/10');
 	for (let local in a.local_routes) if (overlaps(local, '100.64.0.0/10') || overlaps(local, 'fd7a:115c:a1e0::/48')) die('Local exceptions must not override Tailnet addresses');
@@ -123,6 +128,23 @@ export function resources(cfg, adopt, manifest, snapshot) {
 		add('firewall', 'rule', 'tsg_lan_' + i, { name: 'Allow-LAN-to-Tailscale', src: zone, dest: a.zone, family: 'ipv4', proto: 'all', src_ip: length(cidrs) == 1 ? cidrs[0] : cidrs, dest_ip: length(a.targets) == 1 ? a.targets[0] : a.targets, target: 'ACCEPT' });
 		add('firewall', 'nat', 'tsg_nat_' + i, { name: 'LAN-to-Tailscale-SNAT', src: a.zone, family: 'ipv4', proto: 'all', src_ip: length(cidrs) == 1 ? cidrs[0] : cidrs, dest_ip: length(a.targets) == 1 ? a.targets[0] : a.targets, target: 'MASQUERADE' });
 	}
+	if (a.remote_enabled) {
+		add('firewall', 'ipset', 'tsg_remote_active', { name: 'tsg_remote_active', family: 'ipv4', match: ['dest_net'] });
+		add('firewall', 'ipset', 'tsg_remote_known', { name: 'tsg_remote_known', family: 'ipv4', match: ['dest_net'], loadfile: KNOWN });
+		add('firewall', 'include', 'tsg_remote_guard', { type: 'nftables', path: GUARD, position: 'table-append' });
+		let source_cidrs = [];
+		for (let i, iface in a.sources) {
+			let cidrs = source_networks(iface, snapshot), zone = zone_for(iface);
+			if (!length(cidrs)) die('No IPv4 network found on ' + iface);
+			add('network', 'rule', 'tsg_remote_local_' + i, { 'in': iface, priority: '' + (4940 + i), lookup: 'main', suppress_prefixlength: '0' });
+			let scope = { family: 'ipv4', proto: 'all', src_ip: length(cidrs) == 1 ? cidrs[0] : cidrs, ipset: 'tsg_remote_active' };
+			add('firewall', 'rule', 'tsg_remote_lan_' + i, { ...scope, name: 'Allow-LAN-to-Remote-Subnets', src: zone, dest: a.zone, target: 'ACCEPT' });
+			for (let net in cidrs) if (index(source_cidrs, net) < 0) push(source_cidrs, net);
+		}
+		// fw4 UCI nat sections do not support ipset matching. The owned
+		// nft include applies the same destination set and this source set.
+		add('firewall', 'ipset', 'tsg_remote_sources', { name: 'tsg_remote_sources', family: 'ipv4', match: ['src_net'], entry: source_cidrs });
+	}
 	if (a.subnet_access) for (let i, iface in a.sources) for (let j, route in n.advertise_routes) {
 		let zone = zone_for(iface), family = length(iptoarr(split(route, '/')[0])) == 4 ? 'ipv4' : 'ipv6';
 		add('firewall', 'rule', 'tsg_subnet_' + i + '_' + j, { name: 'Allow-Tailscale-to-Subnet', src: a.zone, dest: zone, dest_ip: route, family, proto: 'all', target: 'ACCEPT' });
@@ -137,6 +159,7 @@ export function make_plan(input) {
 	if (!snap.native_ok || time() - (snap.checked_at || 0) > 90) die('Tailscale 状态不可用或过期，请刷新后重试。');
 	if (env.native.exit_node) die('请先停止使用其他 Exit Node，再接管网关策略。');
 	if (!env.managed && input.adopt != true) die('首次应用需要明确接管当前配置。');
+	if ((fs.readfile(GUARD) || null) != (manifest.subnet_guard || null)) die('子网出口保护文件被外部修改，请先恢复托管文件。');
 	let cfg = validate(input.value, env), wanted = resources(cfg, !env.managed, manifest, snap), diffs = [], warnings = [], impacts = [];
 	if (snap.kernel_tun == false) die('网关转发需要内核 TUN 接口，不支持 userspace networking 模式。');
 	if (length(snap.tun_devices || []) && index(snap.tun_devices, cfg.access.device) < 0) die('所选设备不是当前 Tailscale TUN 接口。请先在原生服务中配置设备名。');
@@ -157,6 +180,8 @@ export function make_plan(input) {
 		if (!equal(section(old.package, old.name), old.applied)) die('不能移除被外部修改的配置：' + old.package + '.' + old.name);
 		push(diffs, { resource: old.package + '.' + old.name, before: old.applied, after: null });
 	}
+	if (cfg.access.remote_enabled) for (let set in sections('firewall', 'ipset'))
+		if (index(['tsg_remote_active', 'tsg_remote_known', 'tsg_remote_sources'], set.options.name) >= 0 && !length(filter(wanted, (r) => r.package == 'firewall' && r.name == set.name))) die('子网集合名称被其他设置占用：' + set.name);
 	let allowed = map(wanted, (r) => r.package + '.' + r.name);
 	if (cfg.uplink.enabled) {
 		let ownedTable = env.managed ? env.value.uplink.table : (section('network', 'tailscale_usb')?.options.lookup || null);
@@ -205,7 +230,11 @@ export function make_plan(input) {
 	if (cfg.dns.mode != env.value.dns.mode || cfg.dns.instance != env.value.dns.instance) push(impacts, '更新 DNS 同步；规则变化时 reload dnsmasq');
 	if (!env.managed) push(impacts, '接管旧上联与 DNS 同步服务，保持 Tailscale 身份');
 	if (cfg.node.advertise_exit || length(cfg.node.advertise_routes)) push(warnings, '发布路由仍受 Tailscale 控制台批准与 ACL 限制。');
-	if (cfg.access.lan_enabled) push(warnings, 'LAN 访问采用 SNAT；远端 ACL 识别路由器身份。');
+	if (cfg.access.remote_enabled) {
+		push(impacts, '自动同步远端 IPv4 子网的 LAN 转发与 SNAT');
+		push(warnings, '已识别的远端网段在路由撤回后保持出口保护；手动排除或关闭功能会清除对应保护。');
+	}
+	if (cfg.access.lan_enabled || cfg.access.remote_enabled) push(warnings, 'LAN 访问采用 SNAT；远端 ACL 识别路由器身份。');
 	return { revision: env.revision, config: cfg, resources: wanted, previous: manifest, diffs, warnings, impacts, adopt: !env.managed, created_at: time() };
 }
 
@@ -225,6 +254,7 @@ export function store_config(c, cfg, managed) {
 export function release_plan(input) {
 	let env = configuration(), manifest = read_json(STATE + '/owned.json', null);
 	if (!env.managed || !manifest) die('当前没有托管的网关配置。');
+	if ((fs.readfile(GUARD) || null) != (manifest.subnet_guard || null)) die('子网出口保护文件被外部修改，请先恢复托管文件。');
 	if (input.revision != env.revision || pending_edits()) die('配置已变化或存在待提交修改，请刷新后重试。');
 	let keys = ['hostname', 'accept_routes', 'advertise_exit', 'advertise_routes', 'accept_dns', 'netfilter'];
 	for (let k in keys) if (!equal(env.native[k], manifest.native_current?.[k])) die('Tailscale 原生偏好已被外部修改：' + k);
@@ -237,7 +267,7 @@ export function release_plan(input) {
 	let cfg = env.value;
 	for (let k in ['hostname', 'accept_routes', 'advertise_exit', 'advertise_routes']) cfg.node[k] = manifest.native_original[k];
 	cfg.node.autostart = manifest.autostart_original;
-	cfg.uplink.enabled = false; cfg.dns.mode = 'off';
+	cfg.uplink.enabled = false; cfg.dns.mode = 'off'; cfg.access.remote_enabled = false;
 	return { revision: env.revision, config: cfg, resources: desired, previous: manifest, diffs,
 		warnings: ['恢复接管前的原生偏好与托管资源；保留无关配置。'], impacts: ['停止网关扩展服务', '恢复原有服务的启用状态'],
 		adopt: false, release: true, native_target: manifest.native_original, created_at: time() };

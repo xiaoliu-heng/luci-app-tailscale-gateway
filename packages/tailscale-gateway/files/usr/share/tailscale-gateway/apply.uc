@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { GUARD, KNOWN, subnet_guard, known_subnets, discover_subnets, sync_subnets } from './subnets.uc';
 import { ROOT, RUN, STATE, ensure, run, command_json, read_json, save_json, config_cursor, section, equal, stable, revision, pending_edits, uuid } from './common.uc';
 import { configuration, collect, native_preferences } from './state.uc';
 import { make_plan, release_plan, store_config } from './planner.uc';
@@ -71,6 +72,15 @@ export function rollback(tx, recovering) {
 			if (dnsRestored) atomic(path, v.before);
 			continue;
 		}
+		if (path == KNOWN && now != v.after) {
+			// This file is an evolving prefix ledger, not user configuration.
+			// Preserve newly learned guards when returning to an enabled config.
+			let merged = known_subnets();
+			for (let p in filter(split(trim(v.before || ''), '\n'), (p) => p != '')) if (index(merged, p) < 0) push(merged, p);
+			merged = sort(merged);
+			atomic(path, tx.files[GUARD]?.before ? join('\n', merged) + (length(merged) ? '\n' : '') : v.before);
+			push(restored, path); continue;
+		}
 		if (now != v.after) { push(problems, 'Concurrent edit: ' + path); continue; }
 		try { atomic(path, v.before); push(restored, path); } catch (e) { push(problems, e.message); }
 	}
@@ -86,7 +96,7 @@ export function rollback(tx, recovering) {
 	if (length(filter(restored, (p) => p == ROOT + '/etc/config/network'))) {
 		let r = run(['/bin/ubus', 'call', 'network', 'reload'], 20); if (r.code) push(problems, r.output);
 	}
-	if (length(filter(restored, (p) => p == ROOT + '/etc/config/firewall'))) {
+	if (length(filter(restored, (p) => p == ROOT + '/etc/config/firewall' || p == GUARD || p == KNOWN))) {
 		let r = run(['/sbin/fw4', 'reload'], 30); if (r.code) push(problems, r.output);
 	}
 	if (length(filter(restored, (p) => p == ROOT + '/etc/config/dhcp'))) run(['/etc/init.d/dnsmasq', 'reload'], 30);
@@ -153,7 +163,13 @@ export function apply_config(input, jobid, release) {
 			advertise_exit: cfg.node.advertise_exit, advertise_routes: cfg.node.advertise_routes, netfilter: 0,
 			accept_dns: cfg.dns.mode == 'sync' ? false : before.native.accept_dns };
 		if (release) for (let k in ['hostname', 'accept_routes', 'advertise_exit', 'advertise_routes', 'netfilter', 'accept_dns']) nativeTarget[k] = plan.native_target[k];
-		let manifest = { schema: 1, resources: plan.resources, updated_at: time(),
+		let guard = !release && cfg.access.remote_enabled ? subnet_guard(cfg.access.device) : null;
+		remember(GUARD, guard);
+		// Seed the persistent protection before accepting native routes. Keep
+		// runtime discoveries out of the configuration revision and rollback.
+		let history = guard ? discover_subnets(cfg, read_json(RUN + '/snapshot.json', {}), known_subnets()).known : [];
+		remember(KNOWN, guard ? (length(history) ? join('\n', history) + '\n' : '') : null);
+		let manifest = { schema: 1, subnet_guard: guard, resources: plan.resources, updated_at: time(),
 			native_original: plan.previous.native_original || before.native, native_current: nativeTarget,
 			autostart_original: plan.previous.autostart_original ?? before.value.node.autostart,
 			legacy: plan.previous.legacy || tx.legacy, dns_original: plan.previous.dns_original || tx.dns_before };
@@ -170,7 +186,7 @@ export function apply_config(input, jobid, release) {
 		for (let path, v in tx.files) atomic(path, v.after);
 		// fw4 checks syntax before any firewall rules are activated. A failure
 		// restores only files still identical to this transaction's candidate.
-		if (tx.files[ROOT + '/etc/config/firewall']) checked(['/sbin/fw4', 'check'], 25);
+		if (tx.files[ROOT + '/etc/config/firewall'] || tx.files[GUARD].before != tx.files[GUARD].after) checked(['/sbin/fw4', 'check'], 25);
 		let dns = release ? nativeTarget.accept_dns : cfg.dns.mode == 'sync' ? false : null;
 		let args = native_args(before.native, cfg.node, dns, nativeTarget.netfilter);
 		if (length(args) > 2) {
@@ -183,7 +199,7 @@ export function apply_config(input, jobid, release) {
 			checked(['/etc/init.d/tailscale', cfg.node.autostart ? 'enable' : 'disable']);
 		}
 		if (tx.files[ROOT + '/etc/config/network']) checked(['/bin/ubus', 'call', 'network', 'reload'], 25);
-		if (tx.files[ROOT + '/etc/config/firewall']) checked(['/sbin/fw4', 'reload'], 30);
+		if (tx.files[ROOT + '/etc/config/firewall'] || tx.files[GUARD].before != tx.files[GUARD].after) checked(['/sbin/fw4', 'reload'], 30);
 		tx.dns_touched = cfg.dns.mode != 'paused'; journal();
 		checked(['/etc/init.d/tailscale-gateway', 'enable']);
 		checked(['/etc/init.d/tailscale-gateway', 'reload'], 25);
@@ -204,7 +220,13 @@ export function apply_config(input, jobid, release) {
 		wait_service('tailscale-gateway', 'collector', true);
 		wait_service('tailscale-gateway', 'uplink', !release && cfg.uplink.enabled);
 		wait_service('tailscale-gateway', 'dns', !release && cfg.dns.mode == 'sync');
-		collect();
+		wait_service('tailscale-gateway', 'subnets', !release && cfg.access.remote_enabled);
+		let appliedSnap = collect();
+		if (!release && cfg.access.remote_enabled) {
+			let synced = sync_subnets(configuration().value, appliedSnap);
+			tx.files[KNOWN].after = fs.readfile(KNOWN); journal();
+			if (synced.state == 'error') die(synced.error);
+		} else fs.unlink(RUN + '/subnets.json');
 		for (let r in plan.resources) if (!equal(section(r.package, r.name), r.applied)) die('应用后配置检查失败：' + r.package + '.' + r.name);
 		tx.state = 'applied'; tx.finished_at = time();
 		save_json(STATE + '/transactions/' + jobid + '.json', tx); fs.unlink(STATE + '/pending.json');

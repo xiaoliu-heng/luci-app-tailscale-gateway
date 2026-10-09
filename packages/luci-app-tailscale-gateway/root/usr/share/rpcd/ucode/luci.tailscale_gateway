@@ -26,6 +26,7 @@ return {
 		release: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('release') },
 		apply: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('apply') },
 		node_action: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('node_action') },
+		subnet_sync: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('subnet_sync') },
 		dns_sync: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('dns_sync') },
 		diagnose: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('diagnose') },
 		rollback: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('rollback') },

@@ -9,7 +9,7 @@ const call = (name, params) => rpc.declare({ object: 'luci.tailscale_gateway', m
 const status = call('status'), config = call('config'), plan = call('plan', ['data']), releasePlan = call('release_plan', ['data']);
 const jobStatus = call('job_status', ['id']), getLogs = call('logs');
 const writes = {};
-['apply', 'release', 'node_action', 'dns_sync', 'diagnose', 'rollback', 'recover'].forEach(k => writes[k] = call(k, ['data']));
+['apply', 'release', 'node_action', 'dns_sync', 'subnet_sync', 'diagnose', 'rollback', 'recover'].forEach(k => writes[k] = call(k, ['data']));
 const unwrap = r => { if (!r.ok) throw new Error(r.error || _('操作失败')); return r.data; };
 const text = x => x == null || x === '' ? '—' : String(x);
 const when = x => x ? new Date(x * 1000).toLocaleString() : _('尚无记录');
@@ -88,7 +88,7 @@ return baseclass.extend({
     poll.add(() => this.refresh(), 15);
     const pending = sessionStorage.getItem('tsg-job');
     if (pending && this.writable) this.watchJob(pending);
-    return E('div', {}, [E('link', { rel: 'stylesheet', href: L.resource('tailscale-gateway/style.css') + '?v=0.1.0-r4' }), this.root]);
+    return E('div', {}, [E('link', { rel: 'stylesheet', href: L.resource('tailscale-gateway/style.css') + '?v=0.2.0-r2' }), this.root]);
    },
    refresh: async function() {
     try { this.state = unwrap(await status()); this.renderRuntime(); }
@@ -125,6 +125,14 @@ return baseclass.extend({
     const changed = () => {
      if (this.configBusy) return;
      this.settings[group][key] = type === 'bool' ? input.checked : type === 'number' ? Number(input.value) : type === 'list' ? input.value.split(/[\n,]+/).map(x => x.trim()).filter(Boolean) : type === 'multi' ? Array.from(input.selectedOptions).map(o => o.value) : input.value;
+     if (group === 'access' && key === 'remote_enabled' && input.checked) {
+      this.settings.node.accept_routes = true;
+      if (this.fields['node.accept_routes']) this.fields['node.accept_routes'].checked = true;
+     }
+     if (group === 'node' && key === 'accept_routes' && !input.checked) {
+      this.settings.access.remote_enabled = false;
+      if (this.fields['access.remote_enabled']) this.fields['access.remote_enabled'].checked = false;
+     }
      this.dirty = true; this.draftVersion++; this.previewSequence++;
      this.saved.textContent = _('有未应用的修改'); dom.content(this.preview, []);
     };
@@ -155,6 +163,10 @@ return baseclass.extend({
       f('access', 'sources', _('允许的 LAN / VLAN'), 'multi', null, ifaces),
       f('access', 'targets', _('Tailnet 目标网段'), 'list', _('范围必须位于 100.64.0.0/10 内。每行一个 CIDR。'))
      ]));
+     sections.push(section(_('LAN 访问远端子网'), [
+      f('access', 'remote_enabled', _('自动放行远端子网'), 'bool', _('使用上方选定的 LAN / VLAN，自动同步远端 IPv4 子网的转发与 SNAT。启用时同时接受远端路由；远端 ACL 使用路由器身份。')),
+      f('access', 'remote_exclude', _('额外排除网段'), 'list', _('每行一个 IPv4 CIDR。与本地非默认路由、本机发布网段、本地优先网段或此列表重叠时，整条远端路由不自动放行。'))
+     ]));
      sections.push(section(_('发布与反向访问'), [
       f('node', 'advertise_exit', _('提供 Exit Node'), 'bool'),
       f('access', 'internet_zones', _('互联网出口区域'), 'multi', _('使用现有防火墙区域的 IPv4 NAT；插件维护 Exit Node IPv6 NAT。'), this.cfg.zones.filter(z => z.name !== this.settings.access.zone).map(z => [z.name, z.name])),
@@ -163,7 +175,7 @@ return baseclass.extend({
       f('access', 'router_access', _('允许 Tailnet 访问路由器服务'), 'bool', _('控制 Tailscale 防火墙区域的入站策略，与 LAN 转发分开。'))
      ]));
      sections.push(section(_('路由接收与本地网络'), [
-      f('node', 'accept_routes', _('接受远端子网路由'), 'bool'),
+      f('node', 'accept_routes', _('接受远端子网路由'), 'bool', _('由 Tailscale 维护路由。关闭时也会关闭 LAN 远端子网访问。')),
       f('access', 'local_routes', _('优先使用本地路由的网段'), 'list', _('例如办公室网段。检查与 Tailnet 路由是否重叠。'))
      ]));
      sections.push(E('details', {}, [E('summary', {}, [_('Tailscale 接口与防火墙区域')]),
@@ -187,7 +199,7 @@ return baseclass.extend({
      ]));
      this.logBox = E('div'); sections.push(section(_('日志'), [this.logBox]));
      sections.push(button(_('导出排障信息'), () => {
-      const data = { exported_at: new Date().toISOString(), version: '0.1.0', status: this.state, configuration: this.cfg.value };
+      const data = { exported_at: new Date().toISOString(), version: '0.2.0', status: this.state, configuration: this.cfg.value };
       const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
       const a = E('a', { href: url, download: 'tailscale-gateway-diagnostics.json' }); document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -236,7 +248,25 @@ return baseclass.extend({
      if (up.error) sections.push(notice(up.error, true));
      sections.push(section(_('系统上联'), [this.interfaceTable(), E('a', { href: L.url('admin/network/network') }, [_('在网络设置中调整普通上网优先级')])]));
     }
-    if (kind === 'access') sections.push(notice(_('LAN → Tailnet 当前仅支持 IPv4。子网发布不会自动开放反向访问。')));
+    if (kind === 'access') {
+     const remote = s.subnets || {}, stale = Date.now() / 1000 - (remote.checked_at || 0) > 30;
+     const names = { ready: _('已放行'), unavailable: _('不可用'), excluded: _('已排除'), disabled: _('未启用') };
+     const rows = (remote.rows || []).map(r => {
+      let label = names[r.state] || _('待同步'), reason = r.reason;
+      if (r.state === 'ready' && (remote.state !== 'ok' || stale || !(remote.applied || []).includes(r.cidr))) {
+       label = _('待同步'); reason = _('尚未确认防火墙放行状态');
+      }
+      return [E('span', { 'class': 'tsg-address' }, [r.cidr]), label, r.peers.join(', '), reason];
+     });
+     sections.push(section(_('远端子网状态'), [
+      E('p', {}, [remote.enabled ? _('自动同步已启用 · 最近检查：') + when(remote.checked_at) : _('自动同步未启用；下方可开启 LAN 访问。')]),
+      remote.enabled && remote.error ? notice(remote.error, true) : null,
+      remote.enabled && stale ? notice(_('子网同步状态已过期，请检查后台服务或立即同步。'), true) : null,
+      rows.length ? table([_('网段'), _('状态'), _('子网路由器'), _('说明')], rows) : E('p', {}, [_('尚未发现远端 IPv4 子网。请在远端节点发布路由，并在 Tailscale 控制台批准。')]),
+      E('p', { 'class': 'tsg-help' }, [_('每 5 秒核对路由。路由撤回后保留出口保护，防止已识别网段转走其他上联；排除网段或关闭功能会清除对应保护。已放行表示规则就绪，连通性仍受远端服务和 ACL 限制。')]),
+      button(_('立即同步子网'), () => this.startJob('subnet_sync', {}), false, !this.writable || !remote.enabled || this.busy)
+     ]));
+    }
     if (kind === 'dns') {
      const names = { unchanged: _('规则已一致'), updated: _('已更新规则'), error: _('同步失败，保留有效规则'), deferred: _('等待其他配置编辑完成') };
      const modes = { sync: _('自动同步'), paused: _('暂停更新，保留规则'), off: _('已关闭') };
@@ -329,7 +359,7 @@ return baseclass.extend({
      if (data.auth_url && /^https:\/\/[a-zA-Z0-9.-]+\/a\//.test(data.auth_url)) content.push(E('a', { href: data.auth_url, target: '_blank', rel: 'noopener noreferrer' }, [_('打开 Tailscale 登录页面')]));
      if (data.scope === 'router') content.push(E('p', {}, [_('路由器侧检查退出码：') + data.exit_code]));
      if (data.applied) content.push(E('p', {}, [data.released ? _('已恢复接管前的配置。') : data.adopted ? _('当前配置已接管，后台服务已完成交接。') : _('设置已应用并完成校验。')]));
-     if (data.state) content.push(E('p', {}, [_('DNS 最近成功：') + when(data.state.last_success)]));
+     if (result.action === 'dns_sync' && data.state) content.push(E('p', {}, [_('DNS 最近成功：') + when(data.state.last_success)]));
      dom.content(this.jobOutput, content);
     } catch (e) { dom.content(this.jobOutput, notice(e.message, true)); }
     finally { this.busy = false; this.setConfigBusy(false); }

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { sync_subnets } from './subnets.uc';
 import { RUN, STATE, run, read_json, save_json, id, uuid, ensure } from './common.uc';
 import { configuration, collect } from './state.uc';
 import { apply_config, rollback, recover } from './apply.uc';
@@ -14,6 +15,13 @@ export function execute(action, data, jobid) {
 		let r = rollback(tx, false); collect();
 		if (length(r.problems)) die(join('; ', r.problems));
 		return r;
+	}
+	if (action == 'subnet_sync') {
+		let snap = collect(), cfg = configuration();
+		if (!cfg.managed || !cfg.value.access.remote_enabled) die('请先启用 LAN 访问远端子网。');
+		let result = sync_subnets(cfg.value, snap); collect();
+		if (result.state == 'error') die(result.error);
+		return { output: '远端子网同步完成', state: result };
 	}
 	if (action == 'dns_sync') {
 		let cfg = configuration();
