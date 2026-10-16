@@ -1,2 +1,3 @@
 /etc/config/tailscale_gateway
+/etc/config/tailscale_memory
 /etc/tailscale-gateway/

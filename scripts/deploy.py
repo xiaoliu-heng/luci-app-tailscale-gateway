@@ -34,7 +34,9 @@ while IFS= read -r path; do
   else
     printf '%s\\n' "$path" >>{shlex.quote(backup)}/new-files
   fi
-  if [ "$path" = etc/config/tailscale_gateway ] && [ -f "/$path" ]; then continue; fi
+  case "$path" in etc/config/tailscale_gateway|etc/config/tailscale_memory)
+    [ ! -f "/$path" ] || continue;;
+  esac
   mkdir -p "/$(dirname "$path")"
   cp -p "$stage/$path" "/$path"
 done <"$stage/tsg-install-manifest"
@@ -42,6 +44,10 @@ ucode -c -o "$stage/check.ucb" /usr/share/tailscale-gateway/main.uc
 ucode -c -o "$stage/rpc.ucb" /usr/share/rpcd/ucode/luci.tailscale_gateway
 /etc/init.d/tailscale-gateway enable
 /etc/init.d/tailscale-gateway start
+if [ "$(uci -q get tailscale_memory.main.enabled)" = 1 ]; then
+  /etc/init.d/tailscale-memory-guard enable
+  /etc/init.d/tailscale-memory-guard reload
+fi
 /etc/init.d/rpcd reload
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
 printf '%s\\n' {shlex.quote(backup)}

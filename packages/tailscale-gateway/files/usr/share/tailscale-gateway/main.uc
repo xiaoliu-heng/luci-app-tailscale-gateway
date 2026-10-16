@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { memory_status } from './memory.uc';
 import { sync_subnets } from './subnets.uc';
 import { RUN, STATE, read_json, save_json, ensure } from './common.uc';
 import { configuration, collect } from './state.uc';
@@ -10,6 +11,7 @@ ensure();
 try {
 	let value;
 	if (ARGV[0] == 'snapshot') value = collect();
+	else if (ARGV[0] == 'memory-status') value = memory_status();
 	else if (ARGV[0] == 'subnet-sync') {
 		let cfg = configuration();
 		if (!cfg.managed || !cfg.value.access.remote_enabled || !read_json(STATE + '/owned.json', null)) die('远端子网同步未启用。');

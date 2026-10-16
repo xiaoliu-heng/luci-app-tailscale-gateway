@@ -1,0 +1,155 @@
+#!/bin/sh
+# Reclaim idle Go/WireGuard buffers through the existing local socket.
+# Never restart tailscaled or alter its preferences, routes, or interfaces.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+. /lib/functions.sh
+ROOT=${TSG_MEMORY_ROOT:-}
+[ -z "$ROOT" ] || UCI_CONFIG_DIR="$ROOT/etc/config"
+config_load tailscale_memory
+config_get_bool enabled main enabled 0
+config_get rss_high main rss_high_kib 98304
+config_get available_low main available_low_kib 81920
+config_get interval main interval 10
+config_get cooldown main cooldown 60
+case "$rss_high:$available_low:$interval:$cooldown" in *[!0-9:]*) exit 2;; esac
+[ "$rss_high" -ge 65536 ] && [ "$rss_high" -le 196608 ] || exit 2
+[ "$available_low" -ge 32768 ] && [ "$available_low" -le 131072 ] || exit 2
+[ "$interval" -ge 10 ] && [ "$interval" -le 60 ] || exit 2
+[ "$cooldown" -ge 30 ] && [ "$cooldown" -le 300 ] || exit 2
+mode=${1:-run}
+case "$mode" in run|check|reclaim) ;; *) exit 2;; esac
+RUN="$ROOT/tmp/tailscale-memory"
+CLI=$(command -v tailscale)
+if [ -n "$ROOT" ]; then
+    CLI="$ROOT/usr/sbin/tailscale"
+    # Isolated checks must never fall through to the live daemon's socket.
+    [ -x "$CLI" ] || exit 2
+fi
+mkdir -p "$RUN"
+chmod 700 "$RUN"
+exec 9>"$RUN/guard.lock"
+flock -n 9 || exit 0
+stopping=0 sleeper='' requester='' last_gc=0 requests=0 result=none peak=0
+tracked='' before_rss=0 after_rss=0
+stop() {
+    stopping=1
+    [ -z "$sleeper" ] || kill "$sleeper" 2>/dev/null
+    [ -z "$requester" ] || kill "$requester" 2>/dev/null
+}
+trap stop TERM INT
+
+sample() {
+    pid=''
+    if [ -n "$ROOT" ]; then
+        candidates=$(for path in "$ROOT"/proc/[0-9]*; do echo "${path##*/}"; done)
+    else
+        candidates=$(pidof tailscaled 2>/dev/null)
+    fi
+    for candidate in $candidates; do
+        name=''
+        read -r name <"$ROOT/proc/$candidate/comm" 2>/dev/null || continue
+        [ "$name" = tailscaled ] || continue
+        pid=$candidate
+        break
+    done
+    [ -n "$pid" ] || return 1
+    rss=$(awk '$1=="VmRSS:" {print $2}' "$ROOT/proc/$pid/status" 2>/dev/null)
+    available=$(awk '$1=="MemAvailable:" {print $2}' "$ROOT/proc/meminfo")
+    start_ticks=$(awk '{print $22}' "$ROOT/proc/$pid/stat" 2>/dev/null)
+    case "$rss:$available:$start_ticks" in *[!0-9:]*|:*) return 1;; esac
+    [ -n "$rss" ] && [ -n "$available" ] && [ -n "$start_ticks" ] || return 1
+    if [ -n "$tracked" ] && [ "$tracked" != "$pid:$start_ticks" ]; then
+        last_gc=0 requests=0 result=none peak=0 before_rss=0 after_rss=0
+    fi
+    tracked="$pid:$start_ticks"
+    [ "$rss" -le "$peak" ] || peak=$rss
+    return 0
+}
+
+pressure() {
+    [ "$rss" -ge "$rss_high" ] || {
+        [ "$available" -le "$available_low" ] && [ "$rss" -ge 49152 ]
+    }
+}
+
+status() {
+    printf '{"enabled":%s,"pid":%s,"pid_start_ticks":%s,"rss_kib":%s,"available_kib":%s,"observed_peak_kib":%s,"rss_high_kib":%s,"available_low_kib":%s,"interval":%s,"cooldown":%s,"last_gc":%s,"gc_requests":%s,"last_result":"%s","last_rss_before_kib":%s,"last_rss_after_kib":%s,"checked_at":%s}\n' \
+        "$enabled" "${pid:-0}" "${start_ticks:-0}" "${rss:-0}" "${available:-0}" "$peak" "$rss_high" "$available_low" "$interval" "$cooldown" "$last_gc" "$requests" "$result" "$before_rss" "$after_rss" "$(date +%s)" >"$RUN/status.json.new"
+    mv "$RUN/status.json.new" "$RUN/status.json"
+}
+
+event() {
+    # At most two bounded log files in RAM; no per-poll logging or flash writes.
+    if [ -f "$RUN/events.log" ] && [ "$(wc -c <"$RUN/events.log")" -ge 65536 ]; then
+        mv "$RUN/events.log" "$RUN/events.previous.log"
+    fi
+    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$RUN/events.log"
+    [ -n "$ROOT" ] || logger -t tailscale-memory-guard "$*"
+}
+
+reclaim() {
+    before=$rss
+    last_gc=$(date +%s)
+    passes=0
+    # A second GC is useful for sync.Pool victims, but only if pressure persists.
+    while [ "$passes" -lt 2 ] && [ "$stopping" = 0 ]; do
+        passes=$((passes + 1)); requests=$((requests + 1))
+        GOMEMLIMIT=32MiB GOGC=50 timeout 15 "$CLI" debug localapi GET 'pprof?name=heap&gc=1' >/dev/null 2>"$RUN/gc-error.log" &
+        requester=$!
+        if wait "$requester"; then result=ok; else result=failed; fi
+        requester=''
+        [ "$stopping" = 0 ] || break
+        sleep 1 & sleeper=$!
+        wait "$sleeper" 2>/dev/null; sleeper=''
+        if ! sample; then result=unavailable; break; fi
+        [ "$result" = ok ] && pressure || break
+    done
+    before_rss=$before after_rss=$rss
+    event "pid=$pid rss_before_kib=$before rss_after_kib=$rss available_kib=$available passes=$passes result=$result"
+}
+
+sample || exit 0
+history_number() {
+    value=$(jsonfilter -i "$RUN/status.json" -e "@.$1" 2>/dev/null)
+    case "$value" in ''|*[!0-9]*) value=$2;; esac
+    printf '%s' "$value"
+}
+# Preserve counters and cooldown across guard-only reloads. A different daemon
+# (including a reused PID) starts a new observation history.
+if [ -f "$RUN/status.json" ] && [ "$(history_number pid 0)" = "$pid" ] &&
+    [ "$(history_number pid_start_ticks "$start_ticks")" = "$start_ticks" ]; then
+    last_gc=$(history_number last_gc 0)
+    requests=$(history_number gc_requests 0)
+    prior_peak=$(history_number observed_peak_kib 0)
+    [ "$prior_peak" -le "$peak" ] || peak=$prior_peak
+    before_rss=$(history_number last_rss_before_kib 0)
+    after_rss=$(history_number last_rss_after_kib 0)
+    prior_result=$(jsonfilter -i "$RUN/status.json" -e '@.last_result' 2>/dev/null)
+    case "$prior_result" in ok|failed|unavailable) result=$prior_result;; esac
+fi
+if [ "$mode" = check ]; then
+    status
+    cat "$RUN/status.json"
+    exit 0
+fi
+[ "$enabled" = 1 ] || exit 0
+if [ "$mode" = reclaim ]; then
+    reclaim
+    status
+    cat "$RUN/status.json"
+    exit 0
+fi
+while [ "$stopping" = 0 ]; do
+    if sample; then
+        now=$(date +%s)
+        if pressure && [ $((now - last_gc)) -ge "$cooldown" ]; then
+            reclaim
+        fi
+        [ "$stopping" = 0 ] || break
+        status
+    fi
+    sleep "$interval" & sleeper=$!
+    [ "$stopping" = 0 ] || kill "$sleeper" 2>/dev/null
+    wait "$sleeper" 2>/dev/null; sleeper=''
+done

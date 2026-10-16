@@ -38,6 +38,7 @@ config dnsmasq 'disabled'
 """,
  'etc/config/tailscale_gateway': (ROOT/'packages/tailscale-gateway/files/etc/config/tailscale_gateway').read_text(),
  'etc/config/tailscale': "config settings 'settings'\n option port '41641'\n",
+ 'etc/config/tailscale_memory': (ROOT/'packages/tailscale-gateway/files/etc/config/tailscale_memory').read_text(),
  'status.json': json.dumps({'BackendState':'Running','Self':{'ID':'test','HostName':'test','Online':True},'Peer':{},'TailscaleIPs':['100.100.1.1']}),
  'prefs.json': json.dumps({'Hostname':'test','RouteAll':False,'CorpDNS':False,'NetfilterMode':0,'AdvertiseRoutes':[], 'WantRunning':True}),
  'interfaces.json': json.dumps({'interface':[{'interface':'office','up':True,'ipv4-address':[{'address':'172.16.9.1','mask':24}]}]}),
@@ -64,3 +65,6 @@ for writer in writers:
  output,error=writer.communicate()
  if writer.returncode: sys.exit(error or output)
 print('PASS two concurrent writers publish 200 complete JSON snapshots without staging collisions')
+r=subprocess.run(['ssh',host,'TSG_ROOT=/tmp/tsg-dev/fixture ucode /tmp/tsg-dev/tests/memory.uc'],capture_output=True,text=True)
+print(r.stdout);print(r.stderr,end='')
+if r.returncode: sys.exit(r.returncode)

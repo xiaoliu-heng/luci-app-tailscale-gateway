@@ -221,6 +221,11 @@ return baseclass.extend({
       [_('Tailscale IPv6 出口'), up.ipv6 === 'blocked' ? _('优先 IPv6 不可用，专用表已阻断') : up.ipv6 === 'system' ? _('系统路由') : text(up.ipv6)],
       [_('DNS 最近成功'), when(dns.last_success)], [_('采集时间'), when(s.checked_at)]
      ]));
+     if (s.memory) sections.push(section(_('内存保护'), [facts([
+      [_('Tailscale 当前占用'), bytes(s.memory.process ? s.memory.process.rss_kib * 1024 : null)],
+      [_('系统可用内存'), bytes(s.memory.system.available_kib == null ? null : s.memory.system.available_kib * 1024)],
+      [_('保护状态'), s.memory.value.enabled ? (s.memory.service.running ? _('保护运行中') : _('保护未运行')) : _('已关闭')]
+     ]), link('memory', _('管理内存保护'))]));
      if ((s.warnings || []).length) sections.push(section(_('需要留意'), s.warnings.map(x => E('p', {}, [x]))));
      sections.push(section(_('当前网络'), [this.interfaceTable()]));
      sections.push(E('div', { 'class': 'tsg-toolbar' }, [link('access', _('管理访问与路由')), link('dns', _('管理 DNS')), link('diagnostics', _('打开诊断'))]));
