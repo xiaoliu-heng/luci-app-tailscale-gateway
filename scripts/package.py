@@ -10,7 +10,7 @@ import gzip, hashlib, io, json, os, tarfile, time
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT/'dist'; DIST.mkdir(exist_ok=True)
-VERSION = '0.2.2-r1'
+VERSION = '0.2.3-r1'
 EPOCH = int(os.environ.get('SOURCE_DATE_EPOCH', '1791417600'))
 
 def archive(files, *, end=True, checksums=False):
@@ -63,6 +63,13 @@ for command in ucode ubus ip fw4 flock timeout jsonfilter; do
 done
 /etc/init.d/tailscale-gateway enable
 /etc/init.d/tailscale-gateway start
+if [ "$(uci -q get tailscale_memory.main.enabled)" = 1 ]; then
+ /etc/init.d/tailscale-memory-guard enable
+ /etc/init.d/tailscale-memory-guard reload
+else
+ /etc/init.d/tailscale-memory-guard stop
+ /etc/init.d/tailscale-memory-guard disable
+fi
 '''
 core_pre_remove='''#!/bin/sh
 if ! /usr/libexec/tailscale-gateway check-uninstall; then
@@ -72,6 +79,8 @@ if ! /usr/libexec/tailscale-gateway check-uninstall; then
 fi
 /etc/init.d/tailscale-gateway stop
 /etc/init.d/tailscale-gateway disable
+/etc/init.d/tailscale-memory-guard stop
+/etc/init.d/tailscale-memory-guard disable
 '''
 ui_post='''#!/bin/sh
 rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
@@ -80,7 +89,7 @@ rm -f /tmp/luci-indexcache /tmp/luci-indexcache.*
 paths=[build('tailscale-gateway','Tailscale gateway policies and DNS synchronization',
  [('packages/tailscale-gateway/files','')],
  ['tailscale','ip-full','firewall4','busybox','ucode','ucode-mod-fs','ucode-mod-uci','ucode-mod-ubus','ucode-mod-digest','jsonfilter'],
- {'post-install':core_post,'post-upgrade':core_post,'pre-deinstall':core_pre_remove},['/etc/config/tailscale_gateway']),
+ {'post-install':core_post,'post-upgrade':core_post,'pre-deinstall':core_pre_remove},['/etc/config/tailscale_gateway','/etc/config/tailscale_memory']),
  build('luci-app-tailscale-gateway','LuCI management for Tailscale gateway',
  [('packages/luci-app-tailscale-gateway/root',''),('packages/luci-app-tailscale-gateway/htdocs','www/')],
  ['tailscale-gateway='+VERSION,'luci-base','rpcd-mod-ucode'],

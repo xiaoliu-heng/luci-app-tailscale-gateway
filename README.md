@@ -4,18 +4,18 @@
 
 ## 软件包
 
-- `tailscale-gateway`：配置规划与事务、上联监测、远端子网同步、DNS 同步、状态采集。
-- `luci-app-tailscale-gateway`：概览、节点与连接、上联策略、访问与路由、DNS、诊断与日志。
+- `tailscale-gateway`：配置规划与事务、上联监测、远端子网同步、DNS 同步、状态采集与内存保护。
+- `luci-app-tailscale-gateway`：概览、节点与连接、上联策略、访问与路由、DNS、内存保护、诊断与日志。
 
-当前版本 `0.2.2-r1`。实机目标是 OpenWrt SNAPSHOT / apk / fw4 / Tailscale 1.102.3。架构无关指这些脚本和页面；目标路由器仍须安装适配自身架构的 Tailscale 和其他依赖。尚未完成稳定版 SDK、第二台硬件的兼容验证。
+当前版本 `0.2.3-r1`。实机目标是 OpenWrt SNAPSHOT / apk / fw4 / Tailscale 1.102.3。架构无关指这些脚本和页面；目标路由器仍须安装适配自身架构的 Tailscale 和其他依赖。尚未完成稳定版 SDK、第二台硬件的兼容验证。
 
 ## 安装
 
 从 [GitHub Releases](https://github.com/xiaoliu-heng/luci-app-tailscale-gateway/releases) 下载同一版本的两个 APK 和 `SHA256SUMS`（也可按下文从源码构建到 `dist/`），核对校验值后将两个 APK 放到目标路由器。在依赖已安装时运行：
 
 ```sh
-apk verify --allow-untrusted /tmp/tailscale-gateway-0.2.2-r1.apk /tmp/luci-app-tailscale-gateway-0.2.2-r1.apk
-apk add --allow-untrusted --network=no /tmp/tailscale-gateway-0.2.2-r1.apk /tmp/luci-app-tailscale-gateway-0.2.2-r1.apk
+apk verify --allow-untrusted /tmp/tailscale-gateway-0.2.3-r1.apk /tmp/luci-app-tailscale-gateway-0.2.3-r1.apk
+apk add --allow-untrusted --network=no /tmp/tailscale-gateway-0.2.3-r1.apk /tmp/luci-app-tailscale-gateway-0.2.3-r1.apk
 ```
 
 这些是本地构建、未签名的包，`--allow-untrusted` 仅作用于本次安装，不修改全局信任配置。其他路由器可先从自己的 OpenWrt 软件源安装依赖，再安装本地包。
@@ -33,6 +33,7 @@ apk add --allow-untrusted --network=no /tmp/tailscale-gateway-0.2.2-r1.apk /tmp/
 | 上联策略 | 分别选择 IPv4/IPv6 优先接口，探测与失败/恢复阈值，专用路由表 |
 | 访问与路由 | 限定源 LAN/VLAN 的 IPv4 SNAT、自动接入远端子网；Exit Node、子网发布、反向访问和本地路由例外 |
 | DNS | MagicDNS 与 Split DNS 条件同步、实例选择、暂停、清理、手动同步与生成预览 |
+| 内存保护 | 当前 RSS、进程历史峰值、系统可用内存、回收结果；独立开关、阈值、检查间隔与冷却时间 |
 | 诊断与日志 | 路由、DNS、netcheck、fw4、服务状态、日志、导出、最近应用回滚和撤销接管 |
 
 普通流量保持系统路由的优先级。Tailscale 传输与 Exit Node 转发共用插件的专用表；首版不是全局多 WAN 管理器。优先链路不可用时退回系统路由。优先 IPv4 可用但优先 IPv6 不可用时阻断该专用表的 IPv6；IPv4/IPv6 分别探测。默认在出口改变后重连 tailscaled，以重建已有连接，因此切换可能短暂中断。
@@ -52,6 +53,12 @@ DNS 通过开机、Tailscale 事件和接口变化触发同步，正常检查间
 事件订阅使用本机 `tailscale debug watch-ipn`、`ip monitor` 和 `nft monitor`，不会定期请求云端管理 API。过滤端点、流量统计、上联探测专用路由表和插件自身的集合元素更新，避免重复同步。事件流结束后自动重连，失败等待从 2 秒退避到 60 秒；不支持该订阅接口的 Tailscale 版本继续依靠兜底检查。Tailscale 事件属于非稳定接口，升级后仍需验证兼容性。后台状态采集同样每 300 秒运行，打开 LuCI 时按需刷新。USB/WAN 探测间隔独立，仍默认 10 秒。
 
 ## 配置所有权与恢复
+
+内存保护使用独立的 `/etc/config/tailscale_memory` 与 `tailscale-memory-guard` 服务，不需要接管网关路由即可使用。新安装默认关闭；升级和开发部署保留已有配置。启用后默认每 10 秒只读取 `/proc`，RSS 达到 96 MiB，或系统可用内存不超过 80 MiB 且 Tailscale RSS 至少 48 MiB 时，通过现有本地 socket 请求普通 Go GC；每次最多两次，触发间隔至少 60 秒。它不重启 tailscaled、不改变 Tailscale 偏好或网络配置。
+
+保存设置只修改保护配置并更新保护进程；未变化的健康设置不重新加载服务。页面刷新保留草稿，并通过独立配置版本拒绝并发覆盖。失败时恢复原配置和保护服务状态。回收次数、观测峰值与冷却时间在保护服务重新加载后保留；tailscaled 更换 PID 或启动时间时重新计数。状态与回收日志仅保存在 `/tmp/tailscale-memory/`，日志有大小限制，不按检查周期写闪存。
+
+在线 GC 依赖 Tailscale 的 `debug localapi GET pprof?name=heap&gc=1` 接口；版本不支持时保留进程并显示回收失败。正在使用的内存无法靠 GC 强制释放，因此保护不是 RSS 硬上限。若已有启动脚本和配置提供 `GOMEMLIMIT` / `GOGC`，页面分别显示启动配置和当前进程环境；预算尚未生效时明确提示下次正常启动。本插件不修改 Tailscale 启动脚本或自动重启它来设置 Go 预算。
 
 - 设置：`/etc/config/tailscale_gateway`；Tailscale 原生偏好仍通过官方 CLI 维护。
 - 资源记录和应用事务：`/etc/tailscale-gateway/`，权限 0700。
@@ -75,6 +82,8 @@ python3 tests/worker.py openwrt     # 实际 BusyBox 调度、事件合并、锁
 python3 tests/dns.py                # 实际 ucode/UCI/dnsmasq 解析器，隔离 DNS 配置
 python3 tests/uplink.py             # 真实控制循环，模拟探测/路由，不触碰网络
 node tests/ui.cjs                   # 延迟 RPC 下的编辑保留、预览失效、应用锁定
+node tests/memory-ui.cjs            # 内存设置草稿、只读权限、校验与异步保存
+python3 tests/memory-worker.py openwrt # 实际 BusyBox 内存保护循环，隔离 proc 与 CLI
 ```
 
 `scripts/deploy.py` 是开发期间的文件覆盖安装器；正式部署使用 APK。测试 host 默认 SSH 别名 `openwrt`，DNS 测试同样使用该别名。

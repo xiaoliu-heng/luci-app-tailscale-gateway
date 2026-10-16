@@ -1,10 +1,12 @@
 import * as fs from 'fs';
+import { apply_memory } from './memory.uc';
 import { sync_subnets } from './subnets.uc';
 import { RUN, STATE, run, read_json, save_json, id, uuid, ensure } from './common.uc';
 import { configuration, collect } from './state.uc';
 import { apply_config, rollback, recover } from './apply.uc';
 
 export function execute(action, data, jobid) {
+	if (action == 'memory_apply') return apply_memory(data);
 	if (action == 'apply') return apply_config(data, jobid);
 	if (action == 'release') return apply_config(data, jobid, true);
 	if (action == 'recover') return recover();

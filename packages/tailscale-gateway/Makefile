@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=tailscale-gateway
-PKG_VERSION:=0.2.2
+PKG_VERSION:=0.2.3
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 
@@ -17,6 +17,7 @@ endef
 
 define Package/tailscale-gateway/conffiles
 /etc/config/tailscale_gateway
+/etc/config/tailscale_memory
 endef
 
 define Build/Compile
@@ -31,6 +32,13 @@ define Package/tailscale-gateway/postinst
 [ -n "$$IPKG_INSTROOT" ] || {
   /etc/init.d/tailscale-gateway enable
   /etc/init.d/tailscale-gateway start
+  if [ "$$(uci -q get tailscale_memory.main.enabled)" = 1 ]; then
+    /etc/init.d/tailscale-memory-guard enable
+    /etc/init.d/tailscale-memory-guard reload
+  else
+    /etc/init.d/tailscale-memory-guard stop
+    /etc/init.d/tailscale-memory-guard disable
+  fi
 }
 exit 0
 endef
@@ -45,6 +53,8 @@ if [ -z "$$IPKG_INSTROOT" ]; then
   fi
   /etc/init.d/tailscale-gateway stop
   /etc/init.d/tailscale-gateway disable
+  /etc/init.d/tailscale-memory-guard stop
+  /etc/init.d/tailscale-memory-guard disable
 fi
 exit 0
 endef

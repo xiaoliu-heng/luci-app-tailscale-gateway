@@ -17,6 +17,8 @@ case "$cmd" in
   esac;;
  /bin/ubus)
   case "$*" in
+   *'"name":"tailscale-memory-guard"'*|*'"name": "tailscale-memory-guard"'*)
+    if [ -f "$TSG_ROOT/memory-service.json" ]; then cat "$TSG_ROOT/memory-service.json"; else echo '{}'; fi;;
    'call network.interface dump') cat "$TSG_ROOT/interfaces.json";;
    *'"name":"tailscale-gateway"'*|*'"name": "tailscale-gateway"'*)
     remote=$(uci -c "$TSG_ROOT/etc/config" -P "$TSG_ROOT/tmp/tsg-read" -q get tailscale_gateway.access.remote_enabled || true)
@@ -48,6 +50,17 @@ case "$cmd" in
   if [ "$*" = '-4 -j rule show' ] && [ -f "$TSG_ROOT/rules4.json" ]; then cat "$TSG_ROOT/rules4.json"; else echo '[]'; fi;;
  /usr/bin/env)
   case "$1:$2" in TSG_DNS_INSTANCE=*:/usr/libexec/tailscale-gateway-dns) exit 0;; *) exit 96;; esac;;
+ /etc/init.d/tailscale-memory-guard)
+  mkdir -p "$TSG_ROOT/etc/rc.d"
+  case "$1" in
+   enable) touch "$TSG_ROOT/etc/rc.d/S92tailscale-memory-guard";;
+   disable) rm -f "$TSG_ROOT/etc/rc.d/S92tailscale-memory-guard";;
+   reload)
+    if [ -e "$TSG_ROOT/fail-memory-service" ]; then rm -f "$TSG_ROOT/fail-memory-service"; echo 'injected guard startup failure'; exit 1; fi
+    printf '{"tailscale-memory-guard":{"instances":{"guard":{"running":true,"pid":4242}}}}\n' >"$TSG_ROOT/memory-service.json";;
+   stop) echo '{}' >"$TSG_ROOT/memory-service.json";;
+   *) exit 96;;
+  esac;;
  /etc/init.d/*|/usr/libexec/tailscale-gateway-dns) exit 0;;
  *) echo "Unmocked command: $cmd" >&2; exit 96;;
 esac

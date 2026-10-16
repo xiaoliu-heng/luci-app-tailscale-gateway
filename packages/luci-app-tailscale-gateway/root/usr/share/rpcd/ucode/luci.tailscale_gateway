@@ -1,6 +1,7 @@
 import { read_json, save_json, usr1_signal, RUN, STATE } from '/usr/share/tailscale-gateway/common.uc';
 import { connect } from 'ubus';
 import { configuration } from '/usr/share/tailscale-gateway/state.uc';
+import { memory_status } from '/usr/share/tailscale-gateway/memory.uc';
 import { make_plan, release_plan } from '/usr/share/tailscale-gateway/planner.uc';
 import { enqueue, logs } from '/usr/share/tailscale-gateway/operations.uc';
 import { access } from 'fs';
@@ -20,7 +21,7 @@ function status() {
 	let subnets = read_json(RUN + '/subnets.json', null);
 	if (snap.subnets?.enabled && subnets && subnets.checked_at >= (snap.subnets.checked_at || 0))
 		snap.subnets = { ...subnets, enabled: true, applied: subnets.active || [] };
-	return { ...snap, last_apply: read_json(STATE + '/last-apply.json', null), recovery: read_json(STATE + '/pending.json', null)?.state };
+	return { ...snap, memory: memory_status(), last_apply: read_json(STATE + '/last-apply.json', null), recovery: read_json(STATE + '/pending.json', null)?.state };
 }
 
 function protect(fn) {
@@ -39,6 +40,8 @@ function schedule(action) {
 return {
 	'luci.tailscale_gateway': {
 		status: { call: protect(status) },
+		memory_status: { call: protect(memory_status) },
+		memory_apply: { args: { data: {}, ubus_rpc_session: '' }, call: schedule('memory_apply') },
 		config: { call: protect(configuration) },
 		plan: { args: { data: {} }, call: protect((req) => make_plan(req.args.data)) },
 		release_plan: { args: { data: {} }, call: protect((req) => release_plan(req.args.data)) },

@@ -30,6 +30,9 @@
 !/tests/events.uc
 !/tests/worker.py
 !/tests/fake-nft.uc
+!/tests/memory.uc
+!/tests/memory-ui.cjs
+!/tests/memory-worker.py
 
 **/.DS_Store
 **/__pycache__/
